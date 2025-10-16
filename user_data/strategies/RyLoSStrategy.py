@@ -180,8 +180,6 @@ class RyLoSStrategy(IStrategy):
         # Emergency DCA con doppio controllo (rispetta max_orders)
         current_loss_from_avg = (current_rate - trade.open_rate) / trade.open_rate
         last_order_price = trade.orders[-1].price if trade.orders else trade.open_rate
-        if last_order_price is None:
-            last_order_price = trade.open_rate
 
         if (
             current_loss_from_avg <= self.emergency_dca_threshold.value
