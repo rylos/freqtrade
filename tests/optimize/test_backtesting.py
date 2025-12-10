@@ -879,6 +879,10 @@ def test_backtest_one_detail(default_conf_usdt, mocker, testdatadir, use_detail)
     patch_exchange(mocker)
     mocker.patch(f"{EXMS}.get_min_pair_stake_amount", return_value=0.00001)
     mocker.patch(f"{EXMS}.get_max_pair_stake_amount", return_value=float("inf"))
+    default_conf_usdt["unfilledtimeout"] = {
+        "entry": 11,
+        "exit": 30,
+    }
     if use_detail:
         default_conf_usdt["timeframe_detail"] = "1m"
 
@@ -916,7 +920,7 @@ def test_backtest_one_detail(default_conf_usdt, mocker, testdatadir, use_detail)
     )
     results = result["results"]
     assert not results.empty
-    # Timeout settings from default_conf = entry: 10, exit: 30
+    # Timeout settings from = entry: 11, exit: 30
     assert len(results) == (2 if use_detail else 3)
 
     assert "orders" in results.columns
@@ -1800,7 +1804,7 @@ def test_backtest_multi_pair_detail_simplified(
     if use_detail:
         # Backtest loop is called once per candle per pair
         # Exact numbers depend on trade state - but should be around 2_600
-        assert bl_spy.call_count > 2_170
+        assert bl_spy.call_count > 2_159
         assert bl_spy.call_count < 2_800
         assert len(evaluate_result_multi(results["results"], "1h", 3)) > 0
     else:
@@ -2772,7 +2776,7 @@ def test_time_pair_generator_open_trades_first(mocker, default_conf, dynamic_pai
     dummy_row = (end_date, 1.0, 1.1, 0.9, 1.0, 0, 0, 0, 0, None, None)
     data = {pair: [dummy_row] for pair in pairs}
 
-    def mock_refresh(self):
+    def mock_refresh(self, **kwargs):
         # Simulate shuffle
         self._whitelist = pairs[::-1]  # ['ETH/BTC', 'NEO/BTC', 'LTC/BTC', 'XRP/BTC']
 

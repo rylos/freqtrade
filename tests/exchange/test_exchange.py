@@ -742,10 +742,11 @@ def test_get_pair_base_currency(default_conf, mocker, pair, expected):
 def test_validate_timeframes(default_conf, mocker, timeframe):
     default_conf["timeframe"] = timeframe
     api_mock = MagicMock()
-    id_mock = PropertyMock(return_value="test_exchange")
-    type(api_mock).id = id_mock
-    timeframes = PropertyMock(return_value={"1m": "1m", "5m": "5m", "15m": "15m", "1h": "1h"})
-    type(api_mock).timeframes = timeframes
+    id_mock = MagicMock(return_value="test_exchange")
+    api_mock.id = id_mock
+    api_mock.options = {}
+    timeframes = {"1m": "1m", "5m": "5m", "15m": "15m", "1h": "1h"}
+    api_mock.timeframes = timeframes
 
     mocker.patch(f"{EXMS}._init_ccxt", MagicMock(return_value=api_mock))
     mocker.patch(f"{EXMS}.reload_markets")
@@ -757,12 +758,11 @@ def test_validate_timeframes(default_conf, mocker, timeframe):
 def test_validate_timeframes_failed(default_conf, mocker):
     default_conf["timeframe"] = "3m"
     api_mock = MagicMock()
-    id_mock = PropertyMock(return_value="test_exchange")
-    type(api_mock).id = id_mock
-    timeframes = PropertyMock(
-        return_value={"15s": "15s", "1m": "1m", "5m": "5m", "15m": "15m", "1h": "1h"}
-    )
-    type(api_mock).timeframes = timeframes
+    id_mock = MagicMock(return_value="test_exchange")
+    api_mock.id = id_mock
+    timeframes = {"15s": "15s", "1m": "1m", "5m": "5m", "15m": "15m", "1h": "1h"}
+    api_mock.timeframes = timeframes
+    api_mock.options = {}
 
     mocker.patch(f"{EXMS}._init_ccxt", MagicMock(return_value=api_mock))
     mocker.patch(f"{EXMS}.reload_markets")
@@ -1108,6 +1108,191 @@ def test_create_dry_run_order_fees(
 
     order1 = exchange.fetch_dry_run_order(order["id"])
     assert order1["fee"]["rate"] == fee
+
+
+@pytest.mark.parametrize(
+    "side,limit,offset,is_stop,expected",
+    [
+        ("buy", 46.0, 0.0, False, True),
+        ("buy", 46.0, 0.0, True, False),
+        ("buy", 26.0, 0.0, False, True),
+        ("buy", 26.0, 0.0, True, False),  # Stop - didn't trigger
+        ("buy", 25.55, 0.0, False, False),
+        ("buy", 25.55, 0.0, True, True),  # Stop - triggered
+        ("buy", 1, 0.0, False, False),  # Very far away
+        ("buy", 1, 0.0, True, True),  # Current price is above stop - triggered
+        ("sell", 25.5, 0.0, False, True),
+        ("sell", 50, 0.0, False, False),  # Very far away
+        ("sell", 25.58, 0.0, False, False),
+        ("sell", 25.563, 0.01, False, False),
+        ("sell", 25.563, 0.0, True, False),  # stop order - Not triggered, best bid
+        ("sell", 25.566, 0.0, True, True),  # stop order - triggered
+        ("sell", 26, 0.01, True, True),  # stop order - triggered
+        ("sell", 5.563, 0.01, False, True),
+        ("sell", 5.563, 0.0, True, False),  # stop order - not triggered
+    ],
+)
+def test__dry_is_price_crossed_with_orderbook(
+    default_conf, mocker, order_book_l2_usd, side, limit, offset, is_stop, expected
+):
+    # Best bid 25.563
+    # Best ask 25.566
+    exchange = get_patched_exchange(mocker, default_conf)
+    mocker.patch(f"{EXMS}.exchange_has", return_value=True)
+    exchange.fetch_l2_order_book = order_book_l2_usd
+    orderbook = order_book_l2_usd.return_value
+    result = exchange._dry_is_price_crossed(
+        "LTC/USDT", side, limit, orderbook=orderbook, offset=offset, is_stop=is_stop
+    )
+    assert result is expected
+    assert order_book_l2_usd.call_count == 0
+
+    # Test without passing orderbook
+    order_book_l2_usd.reset_mock()
+    result = exchange._dry_is_price_crossed("LTC/USDT", side, limit, offset=offset, is_stop=is_stop)
+    assert result is expected
+
+
+def test__dry_is_price_crossed_empty_orderbook(default_conf, mocker):
+    exchange = get_patched_exchange(mocker, default_conf)
+    mocker.patch(f"{EXMS}.exchange_has", return_value=True)
+    empty_book = {"asks": [], "bids": []}
+    assert not exchange._dry_is_price_crossed("LTC/USDT", "buy", 100.0, orderbook=empty_book)
+
+
+def test__dry_is_price_crossed_fetches_orderbook(default_conf, mocker, order_book_l2_usd):
+    exchange = get_patched_exchange(mocker, default_conf)
+    mocker.patch(f"{EXMS}.exchange_has", return_value=True)
+    exchange.fetch_l2_order_book = order_book_l2_usd
+    assert exchange._dry_is_price_crossed("LTC/USDT", "buy", 26.0)
+    assert order_book_l2_usd.call_count == 1
+
+
+def test__dry_is_price_crossed_without_orderbook_support(default_conf, mocker):
+    exchange = get_patched_exchange(mocker, default_conf)
+    exchange.fetch_l2_order_book = MagicMock()
+    mocker.patch(f"{EXMS}.exchange_has", return_value=False)
+    assert exchange._dry_is_price_crossed("LTC/USDT", "buy", 1.0)
+    assert exchange._dry_is_price_crossed("LTC/USDT", "sell", 1.0)
+    assert exchange.fetch_l2_order_book.call_count == 0
+    assert not exchange._dry_is_price_crossed("LTC/USDT", "buy", 1.0, is_stop=True)
+    assert not exchange._dry_is_price_crossed("LTC/USDT", "sell", 1.0, is_stop=True)
+
+
+@pytest.mark.parametrize(
+    "crossed,immediate,side,amount,expected_status,expected_fee_rate,expected_calls,taker_or_maker",
+    [
+        (True, True, "buy", 2.0, "closed", 0.005, 1, "taker"),
+        (True, False, "sell", 1.5, "closed", 0.005, 1, "maker"),
+        (False, False, "sell", 1.0, "open", None, 0, None),
+    ],
+)
+def test_check_dry_limit_order_filled(
+    default_conf,
+    mocker,
+    crossed,
+    immediate,
+    side,
+    amount,
+    expected_status,
+    expected_fee_rate,
+    expected_calls,
+    taker_or_maker,
+):
+    exchange = get_patched_exchange(mocker, default_conf)
+    mocker.patch(f"{EXMS}._dry_is_price_crossed", return_value=crossed)
+    fee_mock = mocker.patch(f"{EXMS}.get_fee", return_value=0.005)
+
+    order = {
+        "symbol": "LTC/USDT",
+        "status": "open",
+        "type": "limit",
+        "side": side,
+        "price": 25.0,
+        "amount": amount,
+        "filled": 0.0,
+        "remaining": amount,
+        "cost": 25.0 * amount,
+        "fee": None,
+    }
+
+    result = exchange.check_dry_limit_order_filled(order, immediate=immediate)
+
+    assert result["status"] == expected_status
+    if crossed:
+        assert result["filled"] == amount
+        assert result["remaining"] == 0.0
+        assert result["fee"]["rate"] == expected_fee_rate
+        fee_mock.assert_called_once_with("LTC/USDT", taker_or_maker=taker_or_maker)
+    else:
+        assert result["filled"] == 0.0
+        assert result["remaining"] == amount
+        assert result["fee"] is None
+    assert fee_mock.call_count == expected_calls
+
+
+@pytest.mark.parametrize(
+    "immediate,crossed,expected_status,expected_fee_type",
+    [
+        (True, True, "closed", "taker"),
+        (False, True, "closed", "maker"),
+        (True, False, "open", None),
+    ],
+)
+def test_check_dry_limit_order_filled_stoploss(
+    default_conf, mocker, immediate, crossed, expected_status, expected_fee_type, order_book_l2_usd
+):
+    exchange = get_patched_exchange(mocker, default_conf)
+    mocker.patch.multiple(
+        EXMS,
+        exchange_has=MagicMock(return_value=True),
+        _dry_is_price_crossed=MagicMock(return_value=crossed),
+        fetch_l2_order_book=order_book_l2_usd,
+    )
+    average_mock = mocker.patch(f"{EXMS}.get_dry_market_fill_price", return_value=24.25)
+    fee_mock = mocker.patch(
+        f"{EXMS}.add_dry_order_fee",
+        autospec=True,
+        side_effect=lambda self, pair, dry_order, taker_or_maker: dry_order,
+    )
+
+    amount = 1.75
+    order = {
+        "symbol": "LTC/USDT",
+        "status": "open",
+        "type": "limit",
+        "side": "sell",
+        "amount": amount,
+        "filled": 0.0,
+        "remaining": amount,
+        "price": 25.0,
+        "average": 0.0,
+        "cost": 0.0,
+        "fee": None,
+        "ft_order_type": "stoploss",
+        "stopLossPrice": 24.5,
+    }
+
+    result = exchange.check_dry_limit_order_filled(order, immediate=immediate)
+
+    assert result["status"] == expected_status
+    assert order_book_l2_usd.call_count == 1
+    if crossed:
+        assert result["filled"] == amount
+        assert result["remaining"] == 0
+        assert result["average"] == 24.25
+        assert result["cost"] == pytest.approx(amount * 24.25)
+        assert average_mock.call_count == 1
+        assert fee_mock.call_count == 1
+        assert fee_mock.call_args[0][1] == "LTC/USDT"
+        assert fee_mock.call_args[0][3] == expected_fee_type
+    else:
+        assert result["filled"] == 0.0
+        assert result["remaining"] == amount
+        assert result["average"] == 0.0
+
+        assert average_mock.call_count == 0
+        assert fee_mock.call_count == 0
 
 
 @pytest.mark.parametrize(
@@ -5119,6 +5304,7 @@ def test_combine_funding_and_mark(
             {"date": trade_date, "open": mark_price},
         ]
     )
+    # Test fallback to futures funding rate for missing funding rates
     df = exchange.combine_funding_and_mark(funding_rates, mark_rates, futures_funding_rate)
 
     if futures_funding_rate is not None:
@@ -5145,6 +5331,33 @@ def test_combine_funding_and_mark(
     df = exchange.combine_funding_and_mark(funding_rates, mark_candles, futures_funding_rate)
 
     assert len(df) == 0
+
+    # Test fallback to futures funding rate for middle missing funding rate
+    funding_rates = DataFrame(
+        [
+            {"date": prior2_date, "open": funding_rate},
+            # missing 1 hour
+            {"date": trade_date, "open": funding_rate},
+        ],
+    )
+    mark_rates = DataFrame(
+        [
+            {"date": prior2_date, "open": mark_price},
+            {"date": prior_date, "open": mark_price},
+            {"date": trade_date, "open": mark_price},
+        ]
+    )
+    df = exchange.combine_funding_and_mark(funding_rates, mark_rates, futures_funding_rate)
+
+    if futures_funding_rate is not None:
+        assert len(df) == 3
+        assert df.iloc[0]["open_fund"] == funding_rate
+        assert df.iloc[1]["open_fund"] == futures_funding_rate
+        assert df.iloc[2]["open_fund"] == funding_rate
+        assert df["date"].to_list() == [prior2_date, prior_date, trade_date]
+    else:
+        assert len(df) == 2
+        assert df["date"].to_list() == [prior2_date, trade_date]
 
 
 @pytest.mark.parametrize(
