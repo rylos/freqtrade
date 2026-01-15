@@ -1199,6 +1199,11 @@ def test_api_logs(botclient):
                 "winrate": 0.0,
                 "expectancy": -0.0033695635,
                 "expectancy_ratio": -1.0,
+                "cagr": -0.0024567404889381805,
+                "calmar": -1910.497317469542,
+                "sharpe": -58.138247358830355,
+                "sortino": -58.138247358830355,
+                "sqn": -1.5215,
                 "trading_volume": 75.945,
             },
         ),
@@ -1231,6 +1236,11 @@ def test_api_logs(botclient):
                 "winrate": 1.0,
                 "expectancy": 0.0003695635,
                 "expectancy_ratio": 100,
+                "cagr": 0.0002698167695580622,
+                "calmar": -100.0,
+                "sharpe": 65.81269184917424,
+                "sortino": -100.0,
+                "sqn": 1.7224,
                 "trading_volume": 75.945,
             },
         ),
@@ -1263,6 +1273,11 @@ def test_api_logs(botclient):
                 "winrate": 0.5,
                 "expectancy": -0.0027145635000000003,
                 "expectancy_ratio": -0.48612137582114445,
+                "cagr": -0.0019796559404918757,
+                "calmar": -1857.4671689202785,
+                "sharpe": -36.14602907243071,
+                "sortino": -100.0,
+                "sqn": -0.946,
                 "trading_volume": 75.945,
             },
         ),
@@ -1326,6 +1341,11 @@ def test_api_profit(botclient, mocker, ticker, fee, markets, is_short, expected)
         "winrate": expected["winrate"],
         "expectancy": expected["expectancy"],
         "expectancy_ratio": expected["expectancy_ratio"],
+        "sharpe": expected["sharpe"],
+        "sortino": expected["sortino"],
+        "sqn": expected["sqn"],
+        "calmar": expected["calmar"],
+        "cagr": expected["cagr"],
         "max_drawdown": ANY,
         "max_drawdown_abs": ANY,
         "max_drawdown_start": ANY,
@@ -1911,16 +1931,34 @@ def gen_annotation_params():
         "width": 2,
         "line_style": "dashed",
     }
+    point_annotation = {
+        "type": "point",
+        "x": "2024-01-01 15:30:00",
+        "y": 97000,
+        "color": "",
+        "label": "some label",
+        "size": 10,
+        "shape": "circle",
+    }
 
     line_wrong = deepcopy(line_annotation)
     line_wrong["line_style"] = "dashed2222"
+    point_wrong = deepcopy(point_annotation)
+    point_wrong["shape"] = "circle2222"
+    # annotations / expected
     return [
         ([area_annotation], [area_annotation]),  # Only area
         ([line_annotation], [line_annotation]),  # Only line
-        ([area_annotation, line_annotation], [area_annotation, line_annotation]),  # Both together
+        ([point_annotation], [point_annotation]),  # Only point
+        ([area_annotation, line_annotation], [area_annotation, line_annotation]),  # mark and line
+        (
+            [area_annotation, line_annotation, point_annotation],
+            [area_annotation, line_annotation, point_annotation],
+        ),  # all together
         ([], []),  # Empty
         ([line_wrong], []),  # Invalid line
         ([area_annotation, line_wrong], [area_annotation]),  # Invalid line
+        ([point_wrong], []),  # Invalid point
     ]
 
 
@@ -2521,7 +2559,9 @@ def test_api_strategy(botclient, tmp_path, mocker):
     assert_response(rc)
     assert rc.json()["strategy"] == CURRENT_TEST_STRATEGY
 
-    data = (Path(__file__).parents[1] / "strategy/strats/strategy_test_v3.py").read_text()
+    data = (Path(__file__).parents[1] / "strategy/strats/strategy_test_v3.py").read_text(
+        encoding="utf-8"
+    )
     assert rc.json()["code"] == data
 
     rc = client_get(client, f"{BASE_URI}/strategy/NoStrat")
@@ -2554,6 +2594,7 @@ def test_api_exchanges(botclient):
         "valid": True,
         "supported": True,
         "comment": "",
+        "comment_futures": ANY,
         "dex": False,
         "is_alias": False,
         "alias_for": None,
@@ -2571,6 +2612,7 @@ def test_api_exchanges(botclient):
         "supported": False,
         "dex": False,
         "comment": "",
+        "comment_futures": ANY,
         "is_alias": False,
         "alias_for": None,
         "trade_modes": [{"trading_mode": "spot", "margin_mode": ""}],
@@ -2583,6 +2625,7 @@ def test_api_exchanges(botclient):
         "supported": False,
         "dex": True,
         "comment": ANY,
+        "comment_futures": ANY,
         "is_alias": False,
         "alias_for": None,
         "trade_modes": [{"trading_mode": "spot", "margin_mode": ""}],
