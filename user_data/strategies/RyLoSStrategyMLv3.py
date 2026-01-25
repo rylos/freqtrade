@@ -96,20 +96,21 @@ class RyLoSStrategyMLv3(IStrategy):
     trailing_stop = False  # DISABILITATO per test ML
 
     # ============================================================================
-    # ML THRESHOLD PARAMETERS - WEIGHTED APPROACH (7 optimizable)
+    # ML THRESHOLD PARAMETERS - WEIGHTED APPROACH (3 optimizable)
     # ============================================================================
     
     # Weighted prediction thresholds (single threshold per action)
+    # Widened ranges to allow more trades
     ml_entry_threshold = DecimalParameter(
-        -0.01, 0.02, default=0.001, space="buy", optimize=True,
+        -0.03, 0.03, default=0.0, space="buy", optimize=True,
         load=True, decimals=4
     )
     ml_dca_threshold = DecimalParameter(
-        -0.02, 0.02, default=0.0, space="buy", optimize=True,
+        -0.04, 0.03, default=-0.01, space="buy", optimize=True,
         load=True, decimals=4
     )
     ml_exit_threshold = DecimalParameter(
-        -0.02, 0.005, default=-0.001, space="sell", optimize=True,
+        -0.03, 0.01, default=0.0, space="sell", optimize=True,
         load=True, decimals=4
     )
     
