@@ -109,7 +109,7 @@ class RyLoSStrategyMLv3(IStrategy):
         load=True, decimals=4
     )
     ml_exit_threshold = DecimalParameter(
-        -0.02, 0.005, default=-0.001, space="sell", optimize=True,
+        -0.03, 0.02, default=0.005, space="sell", optimize=True,
         load=True, decimals=4
     )
     
