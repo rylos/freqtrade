@@ -50,13 +50,15 @@ ssh marco@192.168.0.34
 cd /opt/freqtrade
 source .venv/bin/activate
 
-# Usa -j 30 per sfruttare tutti i core
+# MLv3 Strategy - 15 parametri ottimizzabili (buy + sell spaces)
+# Loss: CalmarHyperOptLoss (massimizza Calmar Ratio)
 freqtrade hyperopt -c user_data/config_ml.json \
   --strategy RyLoSStrategyMLv3 \
   --freqaimodel RyLoSPyTorchModel \
-  --hyperopt-loss ProfitDrawdownTolerantHyperOptLoss \
-  --epochs 6000 --spaces buy sell \
-  --timerange 20241215-20260122 \
+  --hyperopt-loss CalmarHyperOptLoss \
+  --epochs 6000 \
+  --spaces buy sell \
+  --timerange 20241215-20260126 \
   -j 30
 ```
 

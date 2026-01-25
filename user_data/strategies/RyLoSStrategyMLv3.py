@@ -1,5 +1,6 @@
 from datetime import UTC, timedelta
 
+import pandas as pd
 import talib.abstract as ta
 from pandas import DataFrame
 
@@ -37,38 +38,7 @@ class RyLoSStrategyMLv3(IStrategy):
     # DCA cooldown dinamico (numero di candele da aspettare)
     dca_cooldown_candles = IntParameter(1, 5, default=2, space="buy", optimize=False)
 
-    # Parametri entry ottimizzabili - Multi-Oscillator Oversold
-    rsi_oversold_threshold = DecimalParameter(25, 40, default=25.333, space="buy", optimize=True)
-    bb_oversold_threshold = DecimalParameter(0.1, 0.3, default=0.294, space="buy", optimize=True)
-    stochrsi_oversold_threshold = DecimalParameter(
-        0, 30, default=0.782, space="buy", optimize=True
-    )
-    williams_oversold_threshold = DecimalParameter(
-        -90, -70, default=-74.991, space="buy", optimize=True
-    )
-    min_oversold_count = IntParameter(2, 4, default=2, space="buy", optimize=True)
-
-    # Emergency DCA (prima della liquidazione)
-    emergency_dca_threshold = DecimalParameter(
-        -0.18, -0.10, default=-0.124, space="buy", optimize=True
-    )
-    emergency_critical_multiplier = DecimalParameter(
-        1.05, 2.0, default=1.175, space="buy", optimize=True
-    )
-
-    # Parametri per exit ottimizzabili - Multi-Oscillator Overbought
-    rsi_overbought_threshold = DecimalParameter(60, 85, default=63.146, space="sell", optimize=True)
-    bb_overbought_threshold = DecimalParameter(0.7, 0.9, default=0.871, space="sell", optimize=True)
-    atr_overbought_multiplier = DecimalParameter(
-        0.5, 2.0, default=0.556, space="sell", optimize=True
-    )
-    stochrsi_overbought_threshold = DecimalParameter(
-        70, 100, default=94.809, space="sell", optimize=True
-    )
-    williams_overbought_threshold = DecimalParameter(
-        -30, -10, default=-24.965, space="sell", optimize=True
-    )
-    min_overbought_count = IntParameter(2, 5, default=4, space="sell", optimize=True)
+    # Exit parameters
     min_profit_for_overbought_exit = DecimalParameter(
         0.01, 0.10, default=0.017, space="sell", optimize=True
     )
@@ -76,14 +46,72 @@ class RyLoSStrategyMLv3(IStrategy):
     # Auto-Reduce per over-exposure (disabilitato)
     auto_reduce_enabled = False  # Disabilitato - causava Loss in backtest
 
-    # Trailing stop (ottimizzato da hyperopt)
+    # Trailing stop (disabilitato)
     trailing_stop = False  # DISABILITATO per test ML
 
-    # ML Filtro DCA (NUOVO - Conservativo)
-    ml_dca_block_threshold = DecimalParameter(-0.05, -0.01, default=-0.02, space="buy", optimize=True)
-
-    # ML Exit (NUOVO - Predizione breve termine 15min)
-    ml_exit_threshold = DecimalParameter(-0.01, 0.02, default=0.005, space="sell", optimize=True)  # noqa: E501
+    # ============================================================================
+    # ML THRESHOLD PARAMETERS (9 total - Multi-Horizon)
+    # ============================================================================
+    
+    # Entry Thresholds (all 3 must be positive)
+    ml_entry_threshold_15m = DecimalParameter(
+        -0.01, 0.02, default=0.005, space="buy", optimize=True
+    )
+    ml_entry_threshold_30m = DecimalParameter(
+        -0.01, 0.02, default=0.005, space="buy", optimize=True
+    )
+    ml_entry_threshold_1h = DecimalParameter(
+        -0.01, 0.02, default=0.005, space="buy", optimize=True
+    )
+    
+    # DCA Thresholds (2 out of 3 must be positive)
+    ml_dca_threshold_15m = DecimalParameter(
+        -0.05, 0.01, default=-0.01, space="buy", optimize=True
+    )
+    ml_dca_threshold_30m = DecimalParameter(
+        -0.05, 0.01, default=-0.01, space="buy", optimize=True
+    )
+    ml_dca_threshold_1h = DecimalParameter(
+        -0.05, 0.01, default=-0.01, space="buy", optimize=True
+    )
+    
+    # Exit Thresholds (2 out of 3 must be negative)
+    ml_exit_threshold_15m = DecimalParameter(
+        -0.02, 0.01, default=-0.005, space="sell", optimize=True
+    )
+    ml_exit_threshold_30m = DecimalParameter(
+        -0.02, 0.01, default=-0.005, space="sell", optimize=True
+    )
+    ml_exit_threshold_1h = DecimalParameter(
+        -0.02, 0.01, default=-0.005, space="sell", optimize=True
+    )
+    
+    # ============================================================================
+    # ML CONFIDENCE-BASED STAKE SIZING (Optional - disabled by default)
+    # ============================================================================
+    
+    # Enable/disable confidence-based stake sizing
+    ml_stake_confidence_enabled = False  # Set to True to enable
+    
+    # Prediction range for confidence mapping
+    ml_confidence_min = DecimalParameter(
+        -0.02, 0.0, default=-0.01, space="buy", optimize=True
+    )
+    ml_confidence_max = DecimalParameter(
+        0.01, 0.05, default=0.02, space="buy", optimize=True
+    )
+    
+    # ============================================================================
+    # ML PARTIAL EXIT FOR PROFITABLE DCA ORDERS (Optional - disabled by default)
+    # ============================================================================
+    
+    # Enable/disable partial exit for profitable DCA orders
+    ml_partial_exit_enabled = False  # Set to True to enable
+    
+    # Minimum profit threshold for partial exit (per individual order)
+    ml_partial_exit_profit_threshold = DecimalParameter(
+        0.01, 0.05, default=0.02, space="sell", optimize=True
+    )
 
     def leverage(
         self,
@@ -119,7 +147,7 @@ class RyLoSStrategyMLv3(IStrategy):
 
     def feature_engineering_expand_basic(self, dataframe: DataFrame, metadata: dict,
                                          **kwargs) -> DataFrame:
-        """Features base per FreqAI"""
+        """Features base per FreqAI - Scalping optimized"""
         dataframe["%-rsi"] = ta.RSI(dataframe["close"], timeperiod=10)
         dataframe["%-atr_pct"] = (ta.ATR(dataframe, timeperiod=10) / dataframe["close"]) * 100
 
@@ -131,62 +159,104 @@ class RyLoSStrategyMLv3(IStrategy):
         dataframe["%-pct_change"] = dataframe["close"].pct_change()
         dataframe["%-pct_change_vol"] = dataframe["volume"].pct_change()
 
+        # NEW: Bollinger Band % (20-period, 2 std dev)
+        bb_upper, _, bb_lower = ta.BBANDS(dataframe["close"], timeperiod=20, nbdevup=2.0, nbdevdn=2.0)
+        dataframe["%-bb_percent"] = (dataframe["close"] - bb_lower) / (bb_upper - bb_lower)
+
+        # NEW: MACD (12,26,9) - Momentum confirmation
+        macd, signal, hist = ta.MACD(dataframe["close"], fastperiod=12, slowperiod=26, signalperiod=9)
+        dataframe["%-macd"] = macd
+        dataframe["%-macd_signal"] = signal
+        dataframe["%-macd_hist"] = hist
+
+        # NEW: EMA 9 and 21 - Trend identification
+        dataframe["%-ema_9"] = ta.EMA(dataframe["close"], timeperiod=9)
+        dataframe["%-ema_21"] = ta.EMA(dataframe["close"], timeperiod=21)
+
+        # NEW: CCI (10-period) - Extreme price movements for scalping
+        dataframe["%-cci"] = ta.CCI(dataframe, timeperiod=10)
+
+        # NEW: Supertrend (ATR 10, multiplier 3) - Clear trend direction
+        # Simplified implementation: price relative to ATR bands
+        atr = ta.ATR(dataframe, timeperiod=10)
+        hl_avg = (dataframe["high"] + dataframe["low"]) / 2
+        upper_band = hl_avg + (3 * atr)
+        lower_band = hl_avg - (3 * atr)
+        # Supertrend: 1 if uptrend (close > lower_band), -1 if downtrend (close < upper_band), 0 otherwise
+        dataframe["%-supertrend"] = ((dataframe["close"] > lower_band).astype(int) - 
+                                      (dataframe["close"] < upper_band).astype(int))
+
+        # NEW: VWAP - Volume Weighted Average Price
+        typical_price = (dataframe["high"] + dataframe["low"] + dataframe["close"]) / 3
+        # Use rolling window instead of cumsum to avoid issues with train/test splits
+        vwap_period = 20
+        dataframe["%-vwap"] = (
+            (typical_price * dataframe["volume"]).rolling(window=vwap_period).sum() /
+            dataframe["volume"].rolling(window=vwap_period).sum()
+        )
+
+        # NEW: OBV normalized - On-Balance Volume
+        obv = ta.OBV(dataframe["close"], dataframe["volume"])
+        # Convert to Series for rolling operations
+        obv_series = pd.Series(obv, index=dataframe.index)
+        dataframe["%-obv_norm"] = obv_series / obv_series.rolling(window=20).mean()
+
         return dataframe
 
     def feature_engineering_standard(self, dataframe: DataFrame, metadata: dict,
                                      **kwargs) -> DataFrame:
-        """Features standard"""
+        """Features standard (non espanse) - Removed temporal features to avoid time-based bias"""
         dataframe["%-adx"] = ta.ADX(dataframe, timeperiod=14)
-        dataframe["%-hour"] = dataframe["date"].dt.hour
-        dataframe["%-day_of_week"] = dataframe["date"].dt.dayofweek
+        # REMOVED: %-hour and %-day_of_week (temporal bias)
 
         return dataframe
 
     def set_freqai_targets(self, dataframe: DataFrame, metadata: dict,
                           **kwargs) -> DataFrame:
-        """Target: variazione prezzo a 12 candele (1h) per DCA e Exit"""
-        # Target 1h per DCA e Exit (stesso target)
-        dataframe["&-s_close"] = (
+        """Multi-horizon targets: 15min, 30min, 1h price change predictions"""
+        # 15-minute target (3 candles @ 5m)
+        dataframe["&-s_close_15m"] = (
+            (dataframe["close"].shift(-3) - dataframe["close"]) /
+            dataframe["close"]
+        )
+        
+        # 30-minute target (6 candles @ 5m)
+        dataframe["&-s_close_30m"] = (
+            (dataframe["close"].shift(-6) - dataframe["close"]) /
+            dataframe["close"]
+        )
+        
+        # 1-hour target (12 candles @ 5m)
+        dataframe["&-s_close_1h"] = (
             (dataframe["close"].shift(-12) - dataframe["close"]) /
             dataframe["close"]
         )
 
         return dataframe
 
-    def get_ml_prediction(self, pair: str) -> float:
-        """Ottieni predizione ML corrente (1h - per DCA)"""
+    def get_ml_predictions(self, pair: str) -> tuple[float, float, float]:
+        """
+        Retrieve all three horizon predictions for a pair.
+        
+        Args:
+            pair: Trading pair (e.g., "BTC/USDT")
+        
+        Returns:
+            tuple: (pred_15m, pred_30m, pred_1h)
+                   Returns (0.0, 0.0, 0.0) if predictions unavailable
+        """
         dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
-        if len(dataframe) < 1 or "&-s_close" not in dataframe.columns:
-            return 0.0
-
-        return dataframe["&-s_close"].iloc[-1]
-
-    def get_ml_prediction_short(self, pair: str) -> float:
-        """Ottieni predizione ML (usa stesso target 1h per Exit)"""
-        dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
-        if len(dataframe) < 1 or "&-s_close" not in dataframe.columns:
-            return 0.0
-
-        return dataframe["&-s_close"].iloc[-1]
-
-    def _count_overbought_indicators(self, candle) -> int:
-        """Conta quanti indicatori sono in zona overbought"""
-        count = 0
-
-        if candle["rsi"] > self.rsi_overbought_threshold.value:
-            count += 1
-        if candle["bb_percent"] > self.bb_overbought_threshold.value:
-            count += 1
-        if candle["close"] > (
-            candle["high"] - candle["atr"] * self.atr_overbought_multiplier.value
-        ):
-            count += 1
-        if candle["stochrsi"] > self.stochrsi_overbought_threshold.value:
-            count += 1
-        if candle["williams_r"] > self.williams_overbought_threshold.value:
-            count += 1
-
-        return count
+        
+        if len(dataframe) < 1:
+            return (0.0, 0.0, 0.0)
+        
+        current_candle = dataframe.iloc[-1]
+        
+        pred_15m = current_candle.get("&-s_close_15m", 0.0)
+        pred_30m = current_candle.get("&-s_close_30m", 0.0)
+        pred_1h = current_candle.get("&-s_close_1h", 0.0)
+        
+        return (pred_15m, pred_30m, pred_1h)
 
     def get_total_position_value(self) -> float:
         """Calcola il valore totale delle posizioni aperte su tutte le pairs"""
@@ -227,6 +297,40 @@ class RyLoSStrategyMLv3(IStrategy):
 
         # Primo ordine: percentuale del balance totale
         base_stake = total_balance * self.first_order_pct.value
+        
+        # ML Confidence-based stake sizing (optional)
+        if self.ml_stake_confidence_enabled:
+            # Get ML predictions for all 3 horizons
+            pred_15m, pred_30m, pred_1h = self.get_ml_predictions(pair)
+            
+            # Calculate average prediction
+            avg_prediction = (pred_15m + pred_30m + pred_1h) / 3
+            
+            # Map prediction to confidence multiplier (0.5 to 1.5)
+            # Linear mapping: ml_confidence_min -> 0.5, ml_confidence_max -> 1.5
+            min_pred = self.ml_confidence_min.value
+            max_pred = self.ml_confidence_max.value
+            
+            # Clamp prediction to range
+            clamped_pred = max(min_pred, min(avg_prediction, max_pred))
+            
+            # Linear interpolation: [min_pred, max_pred] -> [0.5, 1.5]
+            if max_pred > min_pred:
+                confidence_multiplier = 0.5 + (clamped_pred - min_pred) / (max_pred - min_pred)
+            else:
+                confidence_multiplier = 1.0  # Fallback if range is invalid
+            
+            # Apply confidence multiplier
+            base_stake = base_stake * confidence_multiplier
+            
+            # Log confidence multiplier
+            from freqtrade.loggers import logger
+            logger.info(
+                f"{pair}: ML confidence stake sizing - "
+                f"avg_pred={avg_prediction:.4f}, "
+                f"multiplier={confidence_multiplier:.2f}, "
+                f"stake={base_stake:.2f}"
+            )
 
         # Limita al rimanente globale e al limite per pair
         max_allowed_stake = min(remaining_global / 4, per_pair_limit / 4)
@@ -320,50 +424,6 @@ class RyLoSStrategyMLv3(IStrategy):
 
         last_order_price = filled_entries[-1].average
 
-        # Calcola perdita dall'ultimo DCA filled (non dalla media)
-        current_loss_from_last = (current_rate - last_order_price) / last_order_price
-
-        if (
-            current_loss_from_last <= self.emergency_dca_threshold.value
-            and trade.nr_of_successful_entries < max_orders
-        ):  # Rispetta max_orders
-            # Soglia critica = emergency_threshold * multiplier
-            critical_threshold = (
-                self.emergency_dca_threshold.value * self.emergency_critical_multiplier.value
-            )
-
-            if current_loss_from_last <= critical_threshold and current_rate < last_order_price:
-                # Emergency DCA: SALTA controllo BB threshold
-                # Calcola stake come un DCA normale
-                next_dca_order = trade.nr_of_successful_entries + 1
-                stake_pct = self.first_order_pct.value * (
-                    self.dca_multiplier.value ** (next_dca_order - 1)
-                )
-                emergency_stake = total_balance * stake_pct
-
-                # Calcola stake totale della posizione (inclusi DCA)
-                total_stake = sum(order.cost for order in filled_entries if order.cost)
-
-                # Controlli sicurezza per Emergency DCA (riduce stake se necessario)
-                current_position_value = total_stake * 4
-                emergency_position_value = emergency_stake * 4
-
-                # Verifica limite per pair - RIDUCE invece di bloccare
-                if current_position_value + emergency_position_value > per_pair_limit:
-                    remaining_per_pair = per_pair_limit - current_position_value
-                    emergency_stake = remaining_per_pair / 4
-                    emergency_position_value = emergency_stake * 4
-
-                # Verifica limite globale - RIDUCE invece di bloccare
-                if current_global_exposure + emergency_position_value > global_limit:
-                    remaining_global = global_limit - current_global_exposure
-                    emergency_stake = remaining_global / 4
-
-                # Verifica min_stake dopo riduzioni
-                if emergency_stake >= min_stake:
-                    loss_pct = abs(current_loss_from_last * 100)
-                    return emergency_stake, f"emergency_dca_{loss_pct:.1f}%"
-
         # Se abbiamo raggiunto il numero massimo di ordini per questa pair
         if trade.nr_of_successful_entries > max_orders:
             return None
@@ -414,98 +474,116 @@ class RyLoSStrategyMLv3(IStrategy):
         if price_distance < dynamic_distance or current_rate >= last_order_rate:
             return None
 
-        # ML FILTER: blocca DCA standard se predizione negativa (SOLO per DCA standard, NON emergency)  # noqa: E501
-        ml_pred = self.get_ml_prediction(trade.pair)
-        if ml_pred < self.ml_dca_block_threshold.value:
+        # ML FILTER: blocca DCA standard se meno di 2/3 orizzonti positivi
+        # (SOLO per DCA standard, NON emergency)
+        pred_15m, pred_30m, pred_1h = self.get_ml_predictions(trade.pair)
+        
+        positive_count = sum([
+            pred_15m > self.ml_dca_threshold_15m.value,
+            pred_30m > self.ml_dca_threshold_30m.value,
+            pred_1h > self.ml_dca_threshold_1h.value
+        ])
+        
+        if positive_count < 2:
+            # Block DCA - less than 2 horizons are positive
             from freqtrade.loggers import logger
+            horizons_status = []
+            if pred_15m > self.ml_dca_threshold_15m.value:
+                horizons_status.append("15m:✓")
+            else:
+                horizons_status.append("15m:✗")
+            if pred_30m > self.ml_dca_threshold_30m.value:
+                horizons_status.append("30m:✓")
+            else:
+                horizons_status.append("30m:✗")
+            if pred_1h > self.ml_dca_threshold_1h.value:
+                horizons_status.append("1h:✓")
+            else:
+                horizons_status.append("1h:✗")
+            
             logger.info(
                 f"{trade.pair}: DCA blocked by ML filter "
-                f"(pred={ml_pred:.4f} < threshold={self.ml_dca_block_threshold.value:.4f})"
+                f"({positive_count}/3 positive) - "
+                f"{' '.join(horizons_status)} - "
+                f"15m={pred_15m:.4f}, 30m={pred_30m:.4f}, 1h={pred_1h:.4f}"
             )
             return None
-
-        return next_stake, f"dca_{entry_count + 1}_{current_profit*100:.1f}%"
+        
+        # DCA allowed - at least 2/3 horizons are positive
+        from freqtrade.loggers import logger
+        horizons_positive = []
+        if pred_15m > self.ml_dca_threshold_15m.value:
+            horizons_positive.append("15m")
+        if pred_30m > self.ml_dca_threshold_30m.value:
+            horizons_positive.append("30m")
+        if pred_1h > self.ml_dca_threshold_1h.value:
+            horizons_positive.append("1h")
+        
+        logger.info(
+            f"{trade.pair}: DCA allowed by ML filter "
+            f"({positive_count}/3 positive: {'+'.join(horizons_positive)}) - "
+            f"15m={pred_15m:.4f}, 30m={pred_30m:.4f}, 1h={pred_1h:.4f}"
+        )
+        
+        tag = f"dca_ml_2of3_{'+'.join(horizons_positive)}_{current_profit*100:.1f}%"
+        return next_stake, tag
 
     def populate_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
-        # FreqAI DEVE essere chiamato PRIMA
+        """
+        CRITICAL: FreqAI must be called first.
+        Calculate ATR for strategy use (separate from %-atr_pct for ML).
+        """
         dataframe = self.freqai.start(dataframe, metadata, self)
-
-        # RSI periodo 10 per maggiore reattività su 5min
-        dataframe["rsi"] = ta.RSI(dataframe["close"], timeperiod=10)
-
-        # Stochastic RSI periodo 10 (configurazione 10-5-3)
-        stochrsi_k, _ = ta.STOCHRSI(
-            dataframe["close"], timeperiod=10, fastk_period=5, fastd_period=3
-        )
-        dataframe["stochrsi"] = stochrsi_k  # Usa %K (più reattivo)
-
-        # Bollinger Bands %B (20 periodi standard)
-        bb_upper, _, bb_lower = ta.BBANDS(
-            dataframe["close"], timeperiod=20, nbdevup=2.0, nbdevdn=2.0
-        )
-        dataframe["bb_percent"] = (dataframe["close"] - bb_lower) / (bb_upper - bb_lower)
-
-        # ATR periodo 10 per volatilità più reattiva
-        dataframe["atr"] = ta.ATR(
-            dataframe["high"], dataframe["low"], dataframe["close"], timeperiod=10
-        )
-
-        # Williams %R periodo 10
-        dataframe["williams_r"] = ta.WILLR(
-            dataframe["high"], dataframe["low"], dataframe["close"], timeperiod=10
-        )
-
+        
+        # Calculate ATR for DCA distance calculation
+        # This is separate from %-atr_pct used by FreqAI
+        dataframe["atr"] = ta.ATR(dataframe, timeperiod=10)
+        
         return dataframe
 
     def populate_entry_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
-        # Multi-Oscillator Oversold: conta quanti indicatori sono in oversold (4 attivi)
-        rsi_oversold = (
-            (dataframe["rsi"] < self.rsi_oversold_threshold.value).fillna(False).astype(int)
-        )
-        bb_oversold = (
-            (dataframe["bb_percent"] < self.bb_oversold_threshold.value).fillna(False).astype(int)
-        )
-
-        # Stochastic RSI oversold: timing preciso
-        stochrsi_oversold = (
-            (dataframe["stochrsi"] < self.stochrsi_oversold_threshold.value)
-            .fillna(False)
-            .astype(int)
-        )
-
-        # Williams %R oversold
-        williams_oversold = (
-            (dataframe["williams_r"] < self.williams_oversold_threshold.value)
-            .fillna(False)
-            .astype(int)
-        )
-
-        oversold_count = (
-            rsi_oversold + bb_oversold + stochrsi_oversold + williams_oversold
-        )
-
-        # Crea tag parlanti per indicare quali indicatori hanno scatenato l'entry
+        """
+        ML-driven entry logic: All 3 horizons must be positive.
+        
+        Entry signal generated when:
+        - pred_15m > ml_entry_threshold_15m AND
+        - pred_30m > ml_entry_threshold_30m AND
+        - pred_1h > ml_entry_threshold_1h
+        """
+        # Get ML predictions for all 3 horizons
+        pair = metadata["pair"]
+        
+        # Initialize columns
+        dataframe["enter_long"] = 0
         dataframe["enter_tag"] = ""
-
-        entry_condition = (oversold_count >= self.min_oversold_count.value) & (
-            dataframe["close"] < dataframe["open"]
+        
+        # Check if ML predictions are available
+        if "&-s_close_15m" not in dataframe.columns:
+            return dataframe
+        
+        # ML-based entry condition: ALL 3 horizons must be positive
+        entry_condition = (
+            (dataframe["&-s_close_15m"] > self.ml_entry_threshold_15m.value) &
+            (dataframe["&-s_close_30m"] > self.ml_entry_threshold_30m.value) &
+            (dataframe["&-s_close_1h"] > self.ml_entry_threshold_1h.value)
         )
-
-        for i in range(len(dataframe)):
-            if entry_condition.iloc[i]:
-                indicators = []
-                if rsi_oversold.iloc[i]:
-                    indicators.append("rsi")
-                if bb_oversold.iloc[i]:
-                    indicators.append("bb")
-                if stochrsi_oversold.iloc[i]:
-                    indicators.append("stochrsi")
-                if williams_oversold.iloc[i]:
-                    indicators.append("wr")
-
-                dataframe.loc[dataframe.index[i], "enter_tag"] = f"buy_({'+'.join(indicators)})"
-
+        
+        # Set entry signal
         dataframe.loc[entry_condition, "enter_long"] = 1
+        
+        # Create descriptive tags with prediction values
+        for i in dataframe[entry_condition].index:
+            pred_15m = dataframe.loc[i, "&-s_close_15m"]
+            pred_30m = dataframe.loc[i, "&-s_close_30m"]
+            pred_1h = dataframe.loc[i, "&-s_close_1h"]
+            
+            dataframe.loc[i, "enter_tag"] = (
+                f"buy_ml_all_positive_"
+                f"15m:{pred_15m:.4f}_"
+                f"30m:{pred_30m:.4f}_"
+                f"1h:{pred_1h:.4f}"
+            )
+        
         return dataframe
 
     def populate_exit_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
@@ -520,62 +598,103 @@ class RyLoSStrategyMLv3(IStrategy):
         current_profit: float,
         **kwargs,
     ):
-        total_balance = self.wallets.get_total_stake_amount()
-        max_open_trades = self.config.get("max_open_trades", 1)
-
-        # Auto-Reduce: logica Passivbot (DISABILITATO)
-        if self.auto_reduce_enabled:
-            # Calcola exposure di QUESTO trade
+        """
+        ML-driven exit logic with optional partial exit for profitable DCA orders.
+        
+        Exit signal generated when:
+        - current_profit > min_profit_for_overbought_exit AND
+        - At least 2 out of 3 predictions are below their exit thresholds
+        
+        Partial exit (optional):
+        - Evaluates each DCA order individually
+        - Closes profitable DCA orders when ML signals negative
+        """
+        # ========================================================================
+        # PARTIAL EXIT FOR PROFITABLE DCA ORDERS (Optional)
+        # ========================================================================
+        if self.ml_partial_exit_enabled:
             filled_entries = trade.select_filled_orders(trade.entry_side)
-            total_stake = sum(order.cost for order in filled_entries if order.cost)
-            position_exposure = total_stake * 4  # leverage 4x
-
-            # Calcola limite per-pair
-            per_pair_limit = (total_balance * 4) / max_open_trades
-            exposure_ratio = position_exposure / per_pair_limit if per_pair_limit > 0 else 0
-
-            # Trigger: se questo trade supera 101% del suo limite
-            if exposure_ratio > 1.01:
-                # Interpolazione lineare per calcolare ideal stake
-                stake_lowered = total_stake * 0.9
-                exposure_lowered = stake_lowered * 4
-
-                target_exposure = per_pair_limit * 1.01
-
-                # Interpolazione: ideal_stake = stake_lowered + (target - exposure_lowered) * (total_stake - stake_lowered) / (position_exposure - exposure_lowered)  # noqa: E501
-                if position_exposure != exposure_lowered:
-                    ideal_stake = stake_lowered + (target_exposure - exposure_lowered) * (total_stake - stake_lowered) / (position_exposure - exposure_lowered)  # noqa: E501
-                else:
-                    ideal_stake = total_stake
-
-                # Calcola quanto ridurre
-                auto_reduce_stake = total_stake - ideal_stake
-
-                if auto_reduce_stake > 0:
-                    return -auto_reduce_stake, f"sell_auto_reduce_{auto_reduce_stake:.2f}"
-
-        # Exit Unificato: Multi-Oscillator Overbought + ML Conferma (15min)
-        if current_profit > self.min_profit_for_overbought_exit.value:
-            dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
-            current_candle = dataframe.iloc[-1]
-
-            # CONDIZIONE 1: Conta oscillatori overbought
-            overbought_count = self._count_overbought_indicators(current_candle)
-
-            # CONDIZIONE 2: Candela verde
-            is_green_candle = current_candle["close"] > current_candle["open"]
-
-            if overbought_count >= self.min_overbought_count.value and is_green_candle:
-                # CONDIZIONE 3: ML conferma con predizione breve (15min)
-                ml_pred_short = self.get_ml_prediction_short(trade.pair)
-
-                # Exit se ML predice calo o stagnazione
-                if ml_pred_short < self.ml_exit_threshold.value:
-                    from freqtrade.loggers import logger
-                    logger.info(
-                        f"{trade.pair}: Exit overbought + ML confirmed "
-                        f"(pred_1h={ml_pred_short:.4f} < {self.ml_exit_threshold.value:.4f})"
-                    )
-                    return f"sell_overbought_ml_{ml_pred_short*100:.2f}%"
-
+            
+            # Skip first order (only evaluate DCA orders)
+            if len(filled_entries) > 1:
+                # Get ML predictions
+                pred_15m, pred_30m, pred_1h = self.get_ml_predictions(trade.pair)
+                
+                # Count negative horizons
+                negative_count = sum([
+                    pred_15m < self.ml_exit_threshold_15m.value,
+                    pred_30m < self.ml_exit_threshold_30m.value,
+                    pred_1h < self.ml_exit_threshold_1h.value
+                ])
+                
+                # Check if ML signals exit (2 out of 3 negative)
+                if negative_count >= 2:
+                    # Evaluate each DCA order (skip first order at index 0)
+                    for i, order in enumerate(filled_entries[1:], start=1):
+                        # Calculate profit for this specific order
+                        order_profit = (current_rate - order.average) / order.average
+                        
+                        # Check if this order is profitable enough
+                        if order_profit > self.ml_partial_exit_profit_threshold.value:
+                            # Partial exit: return negative stake to close this order
+                            from freqtrade.loggers import logger
+                            
+                            horizons_negative = []
+                            if pred_15m < self.ml_exit_threshold_15m.value:
+                                horizons_negative.append("15m")
+                            if pred_30m < self.ml_exit_threshold_30m.value:
+                                horizons_negative.append("30m")
+                            if pred_1h < self.ml_exit_threshold_1h.value:
+                                horizons_negative.append("1h")
+                            
+                            logger.info(
+                                f"{trade.pair}: Partial exit order #{i+1} - "
+                                f"order_profit={order_profit*100:.2f}%, "
+                                f"ML({negative_count}/3 negative: {'+'.join(horizons_negative)}) - "
+                                f"closing stake={order.cost:.2f}"
+                            )
+                            
+                            # Return negative stake to close this specific order
+                            return (
+                                -order.cost,
+                                f"partial_exit_order_{i+1}_profit_{order_profit*100:.1f}%"
+                            )
+        
+        # ========================================================================
+        # FULL EXIT LOGIC (Original)
+        # ========================================================================
+        # Exit only if minimum profit reached
+        if current_profit <= self.min_profit_for_overbought_exit.value:
+            return None
+        
+        # Get ML predictions for all 3 horizons
+        pred_15m, pred_30m, pred_1h = self.get_ml_predictions(trade.pair)
+        
+        # Count how many predictions are below exit thresholds (negative)
+        negative_count = sum([
+            pred_15m < self.ml_exit_threshold_15m.value,
+            pred_30m < self.ml_exit_threshold_30m.value,
+            pred_1h < self.ml_exit_threshold_1h.value
+        ])
+        
+        # Exit if at least 2 out of 3 horizons are negative
+        if negative_count >= 2:
+            horizons_negative = []
+            if pred_15m < self.ml_exit_threshold_15m.value:
+                horizons_negative.append("15m")
+            if pred_30m < self.ml_exit_threshold_30m.value:
+                horizons_negative.append("30m")
+            if pred_1h < self.ml_exit_threshold_1h.value:
+                horizons_negative.append("1h")
+            
+            from freqtrade.loggers import logger
+            logger.info(
+                f"{trade.pair}: Exit triggered by ML "
+                f"({negative_count}/3 negative: {'+'.join(horizons_negative)}) - "
+                f"15m={pred_15m:.4f}, 30m={pred_30m:.4f}, 1h={pred_1h:.4f} - "
+                f"profit={current_profit*100:.2f}%"
+            )
+            
+            return f"sell_ml_2of3_negative_{'+'.join(horizons_negative)}_{current_profit*100:.1f}%"
+        
         return None

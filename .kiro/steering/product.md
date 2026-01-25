@@ -10,21 +10,21 @@ Strategia di trading crypto basata su Freqtrade con focus su DCA dinamico e mult
 
 ## Caratteristiche Strategia
 
-- **Entry Logic**: Multi-oscillator oversold (RSI, BB%, StochRSI, Williams %R)
-- **DCA Dinamico**: Distanza basata su ATR, stake progressivo, emergency DCA
-- **Exit Logic**: Multi-oscillator overbought con profit minimo
-- **Trailing Stop**: Hardcoded con offset positivo
-- **Risk Management**: Limiti globali e per-pair, cooldown DCA
+- **Entry Logic**: ML-driven con 3 orizzonti temporali (15m, 30m, 1h) - tutti devono essere positivi
+- **DCA Dinamico**: Distanza basata su ATR, stake progressivo, filtro ML (2/3 orizzonti positivi)
+- **Exit Logic**: ML-driven (2/3 orizzonti negativi) con profit minimo
+- **Partial Exit**: Opzionale - chiude singoli ordini DCA profittevoli quando ML segnala negativo
+- **Risk Management**: Limiti globali e per-pair, cooldown DCA, confidence-based stake sizing (opzionale)
 
 ## Obiettivi Ottimizzazione
 
-- Massimizzare Calmar Ratio (return/max_drawdown)
-- Minimizzare durata trade (penalty logaritmico >2h)
-- Bilanciare aggressività DCA con risk management
+- Massimizzare Calmar Ratio (return/max_drawdown) con CalmarHyperOptLoss
+- Ottimizzare 15 parametri: 4 DCA base + 9 ML thresholds + 1 exit + 1 partial exit (opzionale)
+- Bilanciare aggressività DCA con risk management e filtri ML
 
 ## Note Operative
 
 - Solo long trades (can_short = False)
-- Stoploss disabilitato (-1), gestito da trailing
-- ROI target: 50%
-- 20 parametri ottimizzabili attivi
+- Stoploss disabilitato (-1), gestito da custom_exit ML-driven
+- ROI disabilitato (0.5), usa solo custom_exit
+- 15 parametri ottimizzabili attivi (buy + sell spaces)
