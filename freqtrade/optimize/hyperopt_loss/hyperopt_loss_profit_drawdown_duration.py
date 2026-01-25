@@ -81,9 +81,10 @@ class ProfitDrawdownDurationHyperOptLoss(IHyperOptLoss):
         """
         Calculate logarithmic duration penalty starting from 5 hours.
         
-        Penalty scales with profit to maintain balance:
-        - Higher profit → higher penalty for long trades
-        - Lower profit → lower penalty
+        Penalty is a percentage of profit to maintain proper scaling:
+        - 5h → 0% penalty
+        - 10h → ~18% penalty
+        - 24h → ~30% penalty
         
         :param trade_duration_minutes: Average trade duration in minutes
         :param total_profit: Total profit to scale penalty
@@ -95,10 +96,11 @@ class ProfitDrawdownDurationHyperOptLoss(IHyperOptLoss):
         # Ore oltre le 5
         hours_over_threshold = (trade_duration_minutes - 300) / 60
         
-        # Penalty logaritmico scalato per profit
-        # log(1 + hours) * profit * 0.1
-        # Es: 10h duration, 1000 profit → log(6) * 1000 * 0.1 = 179
-        penalty_factor = math.log(1 + hours_over_threshold)
-        penalty = penalty_factor * abs(total_profit) * 0.1
+        # Penalty logaritmico come percentuale del profit
+        # Formula: log(1 + hours) / 10 → percentuale
+        # Es: 10h → log(6)/10 = 0.179 = 17.9% del profit
+        #     24h → log(20)/10 = 0.300 = 30% del profit
+        penalty_percentage = math.log(1 + hours_over_threshold) / 10
+        penalty = penalty_percentage * abs(total_profit)
         
         return penalty
