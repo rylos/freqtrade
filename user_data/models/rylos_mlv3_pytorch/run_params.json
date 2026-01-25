@@ -1,0 +1,69 @@
+{
+    "freqai": {
+        "enabled": true,
+        "model_save_type": "stable",
+        "purge_old_models": 2,
+        "train_period_days": 3,
+        "backtest_period_days": 1,
+        "identifier": "rylos_mlv3_pytorch",
+        "live_retrain_hours": 0,
+        "continual_learning": false,
+        "write_metrics_to_disk": true,
+        "data_kitchen_thread_count": 1,
+        "conv_width": 1,
+        "feature_parameters": {
+            "include_timeframes": [
+                "5m"
+            ],
+            "include_corr_pairlist": [],
+            "label_period_candles": 12,
+            "include_shifted_candles": 0,
+            "indicator_periods_candles": [
+                10
+            ],
+            "DI_threshold": 0.9,
+            "weight_factor": 0.9,
+            "principal_component_analysis": false,
+            "use_SVM_to_remove_outliers": true,
+            "svm_params": {
+                "shuffle": false,
+                "nu": 0.05
+            },
+            "use_DBSCAN_to_remove_outliers": false,
+            "plot_feature_importances": 0,
+            "shuffle_after_split": false,
+            "buffer_train_data_candles": 0
+        },
+        "data_split_parameters": {
+            "test_size": 0.25,
+            "shuffle": false
+        },
+        "model_training_parameters": {
+            "n_epochs": 30,
+            "learning_rate": 0.001,
+            "batch_size": 512,
+            "model_kwargs": {
+                "hidden_dim": 64,
+                "dropout_percent": 0.2,
+                "n_layer": 2
+            },
+            "trainer_kwargs": {
+                "n_steps": null,
+                "drop_last_batch": true
+            }
+        },
+        "expiration_hours": 0,
+        "save_backtest_models": false,
+        "activate_tensorboard": true,
+        "wait_for_training_iteration_on_reload": true,
+        "keras": false,
+        "override_exchange_check": false
+    },
+    "timeframe": "5m",
+    "stake_amount": "unlimited",
+    "stake_currency": "USDT",
+    "max_open_trades": 1,
+    "pairs": [
+        "HYPE/USDT:USDT"
+    ]
+}

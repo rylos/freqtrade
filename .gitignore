@@ -10,7 +10,7 @@ user_data/*
 !user_data/models
 !user_data/freqaimodels
 user_data/freqaimodels/*
-user_data/models/*
+# user_data/models/* # COMMENTATO: models/ ora incluso in git
 user_data/notebooks/*
 freqtrade-plot.html
 freqtrade-profit-plot.html
