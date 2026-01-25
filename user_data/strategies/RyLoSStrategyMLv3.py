@@ -128,8 +128,9 @@ class RyLoSStrategyMLv3(IStrategy):
     )
     
     # Exit Threshold (only 5m for fastest reaction)
+    # Widened range to allow exit with neutral/slightly positive predictions
     ml_exit_threshold_5m = DecimalParameter(
-        -0.02, -0.001, default=-0.005, space="sell", optimize=True,
+        -0.02, 0.005, default=-0.001, space="sell", optimize=True,
         load=True, decimals=4
     )
     
