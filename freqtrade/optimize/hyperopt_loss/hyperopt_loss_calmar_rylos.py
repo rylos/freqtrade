@@ -23,11 +23,15 @@ class CalmarRyLoSHyperOptLoss(IHyperOptLoss):
 
     @staticmethod
     def hyperopt_loss_function(
+        *,
         results: DataFrame,
+        trade_count: int,
         min_date: datetime,
         max_date: datetime,
+        config: dict,
+        processed: dict,
+        backtest_stats: dict,
         starting_balance: float,
-        *args,
         **kwargs,
     ) -> float:
         """
