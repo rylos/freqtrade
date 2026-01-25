@@ -249,17 +249,57 @@ freqtrade hyperopt \
 calmar_ratio = total_return / max_drawdown
 
 # Duration penalty (penalizza trade lunghi)
-if avg_duration <= 2h:
+if avg_duration <= 5h:
     penalty = 0
-elif 2h < avg_duration <= 10h:
-    penalty = log(1 + normalized)  # 0 to 0.693
-else:
-    penalty = 0.693  # capped
+elif avg_duration > 5h:
+    hours_over = (avg_duration - 5h) / 60
+    penalty = log(1 + hours_over)  # Logarithmic growth
 
 result = -calmar_ratio / (1 + penalty)
 ```
 
-**Obiettivo**: Massimizzare Calmar Ratio penalizzando trade con duration > 2h (scalping focus)
+**Obiettivo**: Massimizzare Calmar Ratio penalizzando trade con duration > 5h (scalping focus)
+
+**Esempi Duration Penalty**:
+- 2h → penalty = 0 (nessuna penalità)
+- 5h → penalty = 0 (soglia)
+- 10h → penalty = log(6) = 1.79
+- 24h → penalty = log(20) = 3.00
+
+## Alternative Loss Functions
+
+### ProfitDrawdownTolerantHyperOptLoss
+
+```python
+# freqtrade/optimize/hyperopt_loss/hyperopt_loss_profit_drawdown_tolerant.py
+total_profit = results["profit_abs"].sum()
+
+# Penalità drawdown progressiva
+if max_drawdown > 40%:
+    penalty = base + (excess * profit * 4)  # Aggressiva
+elif max_drawdown > 30%:
+    penalty = (excess * profit * 2)  # Moderata
+else:
+    penalty = 0
+
+result = -profit + penalty
+```
+
+**Obiettivo**: Massimizzare profit totale con penalità drawdown solo se >30%
+
+**Problema per scalping**: ❌ NON penalizza trade lunghi! Può trovare configurazioni con alto profit ma trade che durano giorni.
+
+### Confronto
+
+| Feature | ProfitDrawdownTolerant | CalmarRyLoS |
+|---------|------------------------|-------------|
+| **Obiettivo primario** | Massimizza profit totale | Massimizza Calmar Ratio |
+| **Drawdown penalty** | Solo se >30% (progressiva) | Sempre (nel Calmar Ratio) |
+| **Duration penalty** | ❌ Nessuna | ✅ Penalizza trade >5h |
+| **Scalping focus** | ❌ No | ✅ Sì |
+| **Best for** | Swing trading, hold lunghi | Scalping, trade frequenti |
+
+**Raccomandazione**: Usa **CalmarRyLoSHyperOptLoss** per scalping su HYPE.
 
 ## Configurazione Bot
 
