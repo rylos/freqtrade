@@ -235,14 +235,59 @@ freqtrade hyperopt \
   -c user_data/config_ml.json \
   --strategy RyLoSStrategyMLv3 \
   --freqaimodel RyLoSPyTorchModel \
-  --hyperopt-loss CalmarRyLoSHyperOptLoss \
+  --hyperopt-loss ProfitDrawdownDurationHyperOptLoss \
   --epochs 6000 \
   --spaces buy sell \
   --timerange 20241215-20260126 \
   -j 30
 ```
 
-## Loss Function: CalmarRyLoSHyperOptLoss
+## Loss Function: ProfitDrawdownDurationHyperOptLoss (RECOMMENDED)
+
+```python
+# freqtrade/optimize/hyperopt_loss/hyperopt_loss_profit_drawdown_duration.py
+total_profit = results["profit_abs"].sum()
+trade_duration = results["trade_duration"].mean()
+
+# Drawdown penalty (progressiva sopra 30%)
+if max_drawdown > 40%:
+    drawdown_penalty = base + (excess * profit * 4)  # Aggressiva
+elif max_drawdown > 30%:
+    drawdown_penalty = (excess * profit * 2)  # Moderata
+else:
+    drawdown_penalty = 0
+
+# Duration penalty (percentuale logaritmica sopra 5h)
+if duration <= 5h:
+    duration_penalty = 0
+else:
+    hours_over = (duration - 5h) / 60
+    penalty_pct = log(1 + hours_over) / 10  # Percentuale
+    duration_penalty = penalty_pct * profit
+
+result = -profit + drawdown_penalty + duration_penalty
+```
+
+**Obiettivo**: Massimizzare profit totale con penalità drawdown (>30%) e duration (>5h)
+
+**Duration Penalty Percentuale**:
+- 5h → 0% penalty
+- 10h → 18% penalty (log(6)/10)
+- 24h → 30% penalty (log(20)/10)
+
+**Esempi**:
+- 10,000 profit in 3h → result = -10,000 (best)
+- 10,000 profit in 24h → result = -7,000 (30% penalty)
+- 1,000 profit in 3h → result = -1,000 (worst)
+
+**Vantaggi**:
+- ✅ Massimizza profit assoluto (non ratio)
+- ✅ Penalizza drawdown >30% (progressiva)
+- ✅ Penalizza duration >5h (logaritmica)
+- ✅ Scaling corretto con percentuale
+- ✅ Perfetto per scalping con focus su profit
+
+## Alternative Loss Functions
 
 ```python
 # freqtrade/optimize/hyperopt_loss/hyperopt_loss_calmar_rylos.py
@@ -299,7 +344,7 @@ result = -profit + penalty
 | **Scalping focus** | ❌ No | ✅ Sì |
 | **Best for** | Swing trading, hold lunghi | Scalping, trade frequenti |
 
-**Raccomandazione**: Usa **CalmarRyLoSHyperOptLoss** per scalping su HYPE.
+**Raccomandazione**: Usa **ProfitDrawdownDurationHyperOptLoss** per scalping su HYPE (massimizza profit con penalty duration e drawdown).
 
 ## Configurazione Bot
 
