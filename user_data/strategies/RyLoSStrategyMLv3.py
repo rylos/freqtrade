@@ -164,16 +164,6 @@ class RyLoSStrategyMLv3(IStrategy):
         # NEW: CCI (10-period) - Extreme price movements for scalping
         dataframe["%-cci"] = ta.CCI(dataframe, timeperiod=10)
 
-        # NEW: Supertrend (ATR 10, multiplier 3) - Clear trend direction
-        # Simplified implementation: price relative to ATR bands
-        atr = ta.ATR(dataframe, timeperiod=10)
-        hl_avg = (dataframe["high"] + dataframe["low"]) / 2
-        upper_band = hl_avg + (3 * atr)
-        lower_band = hl_avg - (3 * atr)
-        # Supertrend: 1 if uptrend (close > lower_band), -1 if downtrend (close < upper_band), 0 otherwise
-        dataframe["%-supertrend"] = ((dataframe["close"] > lower_band).astype(int) - 
-                                      (dataframe["close"] < upper_band).astype(int))
-
         # NEW: VWAP - Volume Weighted Average Price
         typical_price = (dataframe["high"] + dataframe["low"] + dataframe["close"]) / 3
         # Use rolling window instead of cumsum to avoid issues with train/test splits
