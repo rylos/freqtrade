@@ -521,12 +521,13 @@ class RyLoSStrategyMLv3(IStrategy):
 
     def populate_entry_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
         """
-        ML-driven entry logic: All 3 horizons must be positive.
+        ML-driven entry logic: At least 2 out of 3 horizons must be positive.
         
         Entry signal generated when:
-        - pred_15m > ml_entry_threshold_15m AND
-        - pred_30m > ml_entry_threshold_30m AND
-        - pred_1h > ml_entry_threshold_1h
+        - At least 2 of the following are true:
+          * pred_15m > ml_entry_threshold_15m
+          * pred_30m > ml_entry_threshold_30m
+          * pred_1h > ml_entry_threshold_1h
         """
         # Get ML predictions for all 3 horizons
         pair = metadata["pair"]
@@ -539,24 +540,34 @@ class RyLoSStrategyMLv3(IStrategy):
         if "&-s_close_15m" not in dataframe.columns:
             return dataframe
         
-        # ML-based entry condition: ALL 3 horizons must be positive
-        entry_condition = (
-            (dataframe["&-s_close_15m"] > self.ml_entry_threshold_15m.value) &
-            (dataframe["&-s_close_30m"] > self.ml_entry_threshold_30m.value) &
-            (dataframe["&-s_close_1h"] > self.ml_entry_threshold_1h.value)
-        )
+        # Count how many horizons are positive
+        positive_15m = dataframe["&-s_close_15m"] > self.ml_entry_threshold_15m.value
+        positive_30m = dataframe["&-s_close_30m"] > self.ml_entry_threshold_30m.value
+        positive_1h = dataframe["&-s_close_1h"] > self.ml_entry_threshold_1h.value
+        
+        # ML-based entry condition: At least 2 out of 3 horizons must be positive
+        positive_count = positive_15m.astype(int) + positive_30m.astype(int) + positive_1h.astype(int)
+        entry_condition = positive_count >= 2
         
         # Set entry signal
         dataframe.loc[entry_condition, "enter_long"] = 1
         
-        # Create descriptive tags with prediction values
+        # Create descriptive tags with prediction values and which horizons are positive
         for i in dataframe[entry_condition].index:
             pred_15m = dataframe.loc[i, "&-s_close_15m"]
             pred_30m = dataframe.loc[i, "&-s_close_30m"]
             pred_1h = dataframe.loc[i, "&-s_close_1h"]
             
+            horizons_positive = []
+            if positive_15m.loc[i]:
+                horizons_positive.append("15m")
+            if positive_30m.loc[i]:
+                horizons_positive.append("30m")
+            if positive_1h.loc[i]:
+                horizons_positive.append("1h")
+            
             dataframe.loc[i, "enter_tag"] = (
-                f"buy_ml_all_positive_"
+                f"buy_ml_2of3_{'+'.join(horizons_positive)}_"
                 f"15m:{pred_15m:.4f}_"
                 f"30m:{pred_30m:.4f}_"
                 f"1h:{pred_1h:.4f}"

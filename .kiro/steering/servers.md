@@ -50,14 +50,14 @@ ssh marco@192.168.0.34
 cd /opt/freqtrade
 source .venv/bin/activate
 
-# MLv3 Strategy - 15 parametri ottimizzabili (buy + sell spaces)
-# Loss: CalmarHyperOptLoss (massimizza Calmar Ratio)
+# MLv3 Strategy - 1 parametro ottimizzabile (ml_dca_block_threshold in buy space)
+# Loss: ProfitDrawdownTolerantHyperOptLoss (bilancia profitto e drawdown con tolleranza)
 freqtrade hyperopt -c user_data/config_ml.json \
   --strategy RyLoSStrategyMLv3 \
   --freqaimodel RyLoSPyTorchModel \
-  --hyperopt-loss CalmarHyperOptLoss \
+  --hyperopt-loss ProfitDrawdownTolerantHyperOptLoss \
   --epochs 6000 \
-  --spaces buy sell \
+  --spaces buy \
   --timerange 20241215-20260126 \
   -j 30
 ```
