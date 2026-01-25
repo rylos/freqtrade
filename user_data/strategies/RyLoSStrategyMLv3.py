@@ -99,31 +99,31 @@ class RyLoSStrategyMLv3(IStrategy):
     # ML THRESHOLD PARAMETERS (9 optimizable - Multi-Horizon)
     # ============================================================================
     
-    # Entry Thresholds (2 out of 3 must be positive)
+    # Entry Thresholds (2 out of 3 must be positive - ONLY positive predictions)
     ml_entry_threshold_5m = DecimalParameter(
-        -0.01, 0.02, default=0.005, space="buy", optimize=True,
+        0.001, 0.02, default=0.005, space="buy", optimize=True,
         load=True, decimals=4
     )
     ml_entry_threshold_15m = DecimalParameter(
-        -0.01, 0.02, default=0.005, space="buy", optimize=True,
+        0.001, 0.02, default=0.005, space="buy", optimize=True,
         load=True, decimals=4
     )
     ml_entry_threshold_30m = DecimalParameter(
-        -0.01, 0.02, default=0.005, space="buy", optimize=True,
+        0.001, 0.02, default=0.005, space="buy", optimize=True,
         load=True, decimals=4
     )
     
-    # DCA Thresholds (2 out of 3 must be positive)
+    # DCA Thresholds (2 out of 3 must be positive - ONLY positive predictions)
     ml_dca_threshold_5m = DecimalParameter(
-        -0.05, 0.01, default=-0.01, space="buy", optimize=True,
+        0.001, 0.02, default=0.005, space="buy", optimize=True,
         load=True, decimals=4
     )
     ml_dca_threshold_15m = DecimalParameter(
-        -0.05, 0.01, default=-0.01, space="buy", optimize=True,
+        0.001, 0.02, default=0.005, space="buy", optimize=True,
         load=True, decimals=4
     )
     ml_dca_threshold_30m = DecimalParameter(
-        -0.05, 0.01, default=-0.01, space="buy", optimize=True,
+        0.001, 0.02, default=0.005, space="buy", optimize=True,
         load=True, decimals=4
     )
     
