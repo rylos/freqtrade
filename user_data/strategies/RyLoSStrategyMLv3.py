@@ -96,42 +96,35 @@ class RyLoSStrategyMLv3(IStrategy):
     trailing_stop = False  # DISABILITATO per test ML
 
     # ============================================================================
-    # ML THRESHOLD PARAMETERS (9 optimizable - Multi-Horizon)
+    # ML THRESHOLD PARAMETERS - WEIGHTED APPROACH (7 optimizable)
     # ============================================================================
     
-    # Entry Thresholds (2 out of 3 must be above threshold - wider range for more entries)
-    ml_entry_threshold_5m = DecimalParameter(
+    # Weighted prediction thresholds (single threshold per action)
+    ml_entry_threshold = DecimalParameter(
         -0.01, 0.02, default=0.001, space="buy", optimize=True,
         load=True, decimals=4
     )
-    ml_entry_threshold_15m = DecimalParameter(
-        -0.01, 0.02, default=0.001, space="buy", optimize=True,
-        load=True, decimals=4
-    )
-    ml_entry_threshold_30m = DecimalParameter(
-        -0.01, 0.02, default=0.001, space="buy", optimize=True,
-        load=True, decimals=4
-    )
-    
-    # DCA Thresholds (2 out of 3 must be above threshold - wider range for more DCA)
-    ml_dca_threshold_5m = DecimalParameter(
+    ml_dca_threshold = DecimalParameter(
         -0.02, 0.02, default=0.0, space="buy", optimize=True,
         load=True, decimals=4
     )
-    ml_dca_threshold_15m = DecimalParameter(
-        -0.02, 0.02, default=0.0, space="buy", optimize=True,
-        load=True, decimals=4
-    )
-    ml_dca_threshold_30m = DecimalParameter(
-        -0.02, 0.02, default=0.0, space="buy", optimize=True,
-        load=True, decimals=4
-    )
-    
-    # Exit Threshold (only 5m for fastest reaction)
-    # Widened range to allow exit with neutral/slightly positive predictions
-    ml_exit_threshold_5m = DecimalParameter(
+    ml_exit_threshold = DecimalParameter(
         -0.02, 0.005, default=-0.001, space="sell", optimize=True,
         load=True, decimals=4
+    )
+    
+    # Weights for each time horizon (normalized internally)
+    ml_weight_5m = DecimalParameter(
+        0.1, 2.0, default=0.5, space="buy", optimize=True,
+        load=True, decimals=2
+    )
+    ml_weight_15m = DecimalParameter(
+        0.1, 2.0, default=1.0, space="buy", optimize=True,
+        load=True, decimals=2
+    )
+    ml_weight_30m = DecimalParameter(
+        0.1, 2.0, default=1.5, space="buy", optimize=True,
+        load=True, decimals=2
     )
     
     # ============================================================================
@@ -322,6 +315,31 @@ class RyLoSStrategyMLv3(IStrategy):
         pred_30m = current_candle.get("&-s_close_30m", 0.0)
         
         return (pred_5m, pred_15m, pred_30m)
+    
+    def get_weighted_ml_prediction(self, pair: str) -> float:
+        """
+        Calculate weighted average of ML predictions across all time horizons.
+        
+        Formula: (pred_5m * w_5m + pred_15m * w_15m + pred_30m * w_30m) / (w_5m + w_15m + w_30m)
+        
+        Args:
+            pair: Trading pair
+        
+        Returns:
+            Weighted average prediction (normalized by sum of weights)
+        """
+        pred_5m, pred_15m, pred_30m = self.get_ml_predictions(pair)
+        
+        # Get weights
+        w_5m = self.ml_weight_5m.value
+        w_15m = self.ml_weight_15m.value
+        w_30m = self.ml_weight_30m.value
+        
+        # Calculate weighted average
+        total_weight = w_5m + w_15m + w_30m
+        weighted_pred = (pred_5m * w_5m + pred_15m * w_15m + pred_30m * w_30m) / total_weight
+        
+        return weighted_pred
 
     def get_total_position_value(self) -> float:
         """Calcola il valore totale delle posizioni aperte su tutte le pairs"""
@@ -582,58 +600,33 @@ class RyLoSStrategyMLv3(IStrategy):
         if price_distance < dynamic_distance or current_rate >= last_order_rate:
             return None
 
-        # ML FILTER: blocca DCA standard se meno di 2/3 orizzonti positivi
-        # (SOLO per DCA standard, NON emergency)
-        pred_5m, pred_15m, pred_30m = self.get_ml_predictions(trade.pair)
+        # ML FILTER: Use weighted prediction for DCA decision
+        weighted_pred = self.get_weighted_ml_prediction(trade.pair)
         
-        positive_count = sum([
-            pred_5m > self.ml_dca_threshold_5m.value,
-            pred_15m > self.ml_dca_threshold_15m.value,
-            pred_30m > self.ml_dca_threshold_30m.value
-        ])
-        
-        if positive_count < 2:
-            # Block DCA - less than 2 horizons are positive
+        if weighted_pred < self.ml_dca_threshold.value:
+            # Block DCA - weighted prediction below threshold
             from freqtrade.loggers import logger
-            horizons_status = []
-            if pred_5m > self.ml_dca_threshold_5m.value:
-                horizons_status.append("5m:✓")
-            else:
-                horizons_status.append("5m:✗")
-            if pred_15m > self.ml_dca_threshold_15m.value:
-                horizons_status.append("15m:✓")
-            else:
-                horizons_status.append("15m:✗")
-            if pred_30m > self.ml_dca_threshold_30m.value:
-                horizons_status.append("30m:✓")
-            else:
-                horizons_status.append("30m:✗")
-            
+            pred_5m, pred_15m, pred_30m = self.get_ml_predictions(trade.pair)
             logger.info(
                 f"{trade.pair}: DCA blocked by ML filter "
-                f"({positive_count}/3 positive) - "
-                f"{' '.join(horizons_status)} - "
-                f"5m={pred_5m:.4f}, 15m={pred_15m:.4f}, 30m={pred_30m:.4f}"
+                f"(weighted={weighted_pred:.4f} < threshold={self.ml_dca_threshold.value:.4f}) - "
+                f"5m={pred_5m:.4f}, 15m={pred_15m:.4f}, 30m={pred_30m:.4f} - "
+                f"weights: 5m={self.ml_weight_5m.value:.2f}, "
+                f"15m={self.ml_weight_15m.value:.2f}, "
+                f"30m={self.ml_weight_30m.value:.2f}"
             )
             return None
         
-        # DCA allowed - at least 2/3 horizons are positive
+        # DCA allowed - weighted prediction above threshold
         from freqtrade.loggers import logger
-        horizons_positive = []
-        if pred_5m > self.ml_dca_threshold_5m.value:
-            horizons_positive.append("5m")
-        if pred_15m > self.ml_dca_threshold_15m.value:
-            horizons_positive.append("15m")
-        if pred_30m > self.ml_dca_threshold_30m.value:
-            horizons_positive.append("30m")
-        
+        pred_5m, pred_15m, pred_30m = self.get_ml_predictions(trade.pair)
         logger.info(
             f"{trade.pair}: DCA allowed by ML filter "
-            f"({positive_count}/3 positive: {'+'.join(horizons_positive)}) - "
+            f"(weighted={weighted_pred:.4f} > threshold={self.ml_dca_threshold.value:.4f}) - "
             f"5m={pred_5m:.4f}, 15m={pred_15m:.4f}, 30m={pred_30m:.4f}"
         )
         
-        tag = f"dca_ml_2of3_{'+'.join(horizons_positive)}_{current_profit*100:.1f}%"
+        tag = f"dca_ml_w{weighted_pred:.4f}_{current_profit*100:.1f}%"
         return next_stake, tag
 
     def populate_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
@@ -651,15 +644,10 @@ class RyLoSStrategyMLv3(IStrategy):
 
     def populate_entry_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
         """
-        ML-driven entry logic: At least 2 out of 3 horizons must be positive.
+        ML-driven entry logic using weighted predictions.
         
-        Entry signal generated when:
-        - At least 2 of the following are true:
-          * pred_5m > ml_entry_threshold_5m
-          * pred_15m > ml_entry_threshold_15m
-          * pred_30m > ml_entry_threshold_30m
+        Entry signal when weighted_prediction > ml_entry_threshold
         """
-        # Get ML predictions for all 3 horizons
         pair = metadata["pair"]
         
         # Initialize columns
@@ -670,34 +658,33 @@ class RyLoSStrategyMLv3(IStrategy):
         if "&-s_close_5m" not in dataframe.columns:
             return dataframe
         
-        # Count how many horizons are positive
-        positive_5m = dataframe["&-s_close_5m"] > self.ml_entry_threshold_5m.value
-        positive_15m = dataframe["&-s_close_15m"] > self.ml_entry_threshold_15m.value
-        positive_30m = dataframe["&-s_close_30m"] > self.ml_entry_threshold_30m.value
+        # Calculate weighted predictions for each row
+        w_5m = self.ml_weight_5m.value
+        w_15m = self.ml_weight_15m.value
+        w_30m = self.ml_weight_30m.value
+        total_weight = w_5m + w_15m + w_30m
         
-        # ML-based entry condition: At least 2 out of 3 horizons must be positive
-        positive_count = positive_5m.astype(int) + positive_15m.astype(int) + positive_30m.astype(int)
-        entry_condition = positive_count >= 2
+        dataframe["weighted_pred"] = (
+            dataframe["&-s_close_5m"] * w_5m +
+            dataframe["&-s_close_15m"] * w_15m +
+            dataframe["&-s_close_30m"] * w_30m
+        ) / total_weight
+        
+        # Entry condition: weighted prediction above threshold
+        entry_condition = dataframe["weighted_pred"] > self.ml_entry_threshold.value
         
         # Set entry signal
         dataframe.loc[entry_condition, "enter_long"] = 1
         
-        # Create descriptive tags with prediction values and which horizons are positive
+        # Create descriptive tags
         for i in dataframe[entry_condition].index:
             pred_5m = dataframe.loc[i, "&-s_close_5m"]
             pred_15m = dataframe.loc[i, "&-s_close_15m"]
             pred_30m = dataframe.loc[i, "&-s_close_30m"]
-            
-            horizons_positive = []
-            if positive_5m.loc[i]:
-                horizons_positive.append("5m")
-            if positive_15m.loc[i]:
-                horizons_positive.append("15m")
-            if positive_30m.loc[i]:
-                horizons_positive.append("30m")
+            weighted = dataframe.loc[i, "weighted_pred"]
             
             dataframe.loc[i, "enter_tag"] = (
-                f"buy_ml_2of3_{'+'.join(horizons_positive)}_"
+                f"buy_ml_w{weighted:.4f}_"
                 f"5m:{pred_5m:.4f}_"
                 f"15m:{pred_15m:.4f}_"
                 f"30m:{pred_30m:.4f}"
@@ -852,29 +839,32 @@ class RyLoSStrategyMLv3(IStrategy):
         **kwargs,
     ):
         """
-        ML-driven exit logic with smart stoploss.
+        ML-driven exit logic using weighted predictions.
         
-        Exit scenarios:
-        1. PROFIT EXIT: profit > min AND 5m horizon negative (fastest reaction)
-        
-        Note: Stoploss is now handled by custom_stoploss() method
+        Exit when:
+        - Profit > min_profit_for_overbought_exit AND
+        - Weighted prediction < ml_exit_threshold
         """
-        # Get ML predictions for all 3 horizons
-        pred_5m, pred_15m, pred_30m = self.get_ml_predictions(trade.pair)
+        # Get weighted ML prediction
+        weighted_pred = self.get_weighted_ml_prediction(trade.pair)
         
         # ============================================================================
-        # PROFIT EXIT (only 5m for fastest reaction)
+        # PROFIT EXIT (weighted prediction)
         # ============================================================================
         if current_profit > self.min_profit_for_overbought_exit.value:
-            if pred_5m < self.ml_exit_threshold_5m.value:
+            if weighted_pred < self.ml_exit_threshold.value:
                 from freqtrade.loggers import logger
+                pred_5m, pred_15m, pred_30m = self.get_ml_predictions(trade.pair)
                 logger.info(
-                    f"{trade.pair}: Profit exit triggered by ML 5m - "
-                    f"5m={pred_5m:.4f} (threshold={self.ml_exit_threshold_5m.value:.4f}) - "
-                    f"15m={pred_15m:.4f}, 30m={pred_30m:.4f} - "
+                    f"{trade.pair}: Profit exit triggered by ML weighted prediction - "
+                    f"weighted={weighted_pred:.4f} (threshold={self.ml_exit_threshold.value:.4f}) - "
+                    f"5m={pred_5m:.4f}, 15m={pred_15m:.4f}, 30m={pred_30m:.4f} - "
+                    f"weights: 5m={self.ml_weight_5m.value:.2f}, "
+                    f"15m={self.ml_weight_15m.value:.2f}, "
+                    f"30m={self.ml_weight_30m.value:.2f} - "
                     f"profit={current_profit*100:.2f}%"
                 )
                 
-                return f"sell_ml_5m_{current_profit*100:.1f}%"
+                return f"sell_ml_w{weighted_pred:.4f}_{current_profit*100:.1f}%"
         
         return None
