@@ -100,33 +100,6 @@ class RyLoSStrategyMLv3(IStrategy):
     ml_confidence_max = DecimalParameter(
         0.01, 0.05, default=0.02, space="buy", optimize=True
     )
-    
-    # ============================================================================
-    # ML PARTIAL EXIT FOR PROFITABLE DCA ORDERS (Optional - disabled by default)
-    # ============================================================================
-    
-    # Enable/disable partial exit for profitable DCA orders
-    # When enabled, closes ALL profitable DCA orders simultaneously when ML signals negative
-    # This protects profits on individual DCA orders while keeping the first order open
-    ml_partial_exit_enabled = False  # Set to True to enable
-    
-    # Minimum profit threshold for partial exit (per individual order)
-    # Only DCA orders with profit > threshold will be closed
-    ml_partial_exit_profit_threshold = DecimalParameter(
-        0.01, 0.05, default=0.02, space="sell", optimize=True
-    )
-    
-    # ============================================================================
-    # ML SIGNAL STRENGTH THRESHOLD (for Full vs Partial Exit decision)
-    # ============================================================================
-    
-    # Threshold for "strong negative" signal (weighted average of 3 horizons)
-    # If weighted_avg < threshold → FULL EXIT (close everything)
-    # If weighted_avg >= threshold → PARTIAL EXIT (close only profitable DCAs)
-    # Weights: 15m=20%, 30m=30%, 1h=50% (longer term has more weight)
-    ml_strong_negative_threshold = DecimalParameter(
-        -0.05, -0.01, default=-0.03, space="sell", optimize=True
-    )
 
     def leverage(
         self,
@@ -614,14 +587,16 @@ class RyLoSStrategyMLv3(IStrategy):
         **kwargs,
     ):
         """
-        ML-driven exit logic with intelligent Full vs Partial exit decision.
+        Simple ML-driven full exit logic.
         
-        Decision logic based on ML signal strength (weighted average):
-        - Strong negative signal → FULL EXIT (close everything)
-        - Mild negative signal → PARTIAL EXIT (close only profitable DCAs)
-        
-        Weighted average: 15m=20%, 30m=30%, 1h=50% (longer term weighted more)
+        Exit when:
+        - current_profit > min_profit_for_overbought_exit AND
+        - At least 2 out of 3 ML predictions are below their exit thresholds
         """
+        # Exit only if minimum profit reached
+        if current_profit <= self.min_profit_for_overbought_exit.value:
+            return None
+        
         # Get ML predictions for all 3 horizons
         pred_15m, pred_30m, pred_1h = self.get_ml_predictions(trade.pair)
         
@@ -632,103 +607,24 @@ class RyLoSStrategyMLv3(IStrategy):
             pred_1h < self.ml_exit_threshold_1h.value
         ])
         
-        # Exit only if at least 2 out of 3 horizons are negative
-        if negative_count < 2:
-            return None
-        
-        # ========================================================================
-        # ML SIGNAL STRENGTH ANALYSIS
-        # ========================================================================
-        
-        # Calculate weighted average of ALL 3 horizons
-        # Longer timeframes have more weight (15m=20%, 30m=30%, 1h=50%)
-        weighted_prediction = (
-            pred_15m * 0.2 +
-            pred_30m * 0.3 +
-            pred_1h * 0.5
-        )
-        
-        from freqtrade.loggers import logger
-        
-        # Identify which horizons are negative
-        horizons_negative = []
-        if pred_15m < self.ml_exit_threshold_15m.value:
-            horizons_negative.append("15m")
-        if pred_30m < self.ml_exit_threshold_30m.value:
-            horizons_negative.append("30m")
-        if pred_1h < self.ml_exit_threshold_1h.value:
-            horizons_negative.append("1h")
-        
-        # ========================================================================
-        # DECISION: FULL EXIT vs PARTIAL EXIT
-        # ========================================================================
-        
-        # FULL EXIT: Strong negative signal (weighted avg below threshold)
-        if weighted_prediction < self.ml_strong_negative_threshold.value:
-            # Only exit if minimum profit reached
-            if current_profit > self.min_profit_for_overbought_exit.value:
-                logger.info(
-                    f"{trade.pair}: FULL EXIT - Strong negative ML signal - "
-                    f"weighted_avg={weighted_prediction:.4f} < threshold={self.ml_strong_negative_threshold.value:.4f} - "
-                    f"({negative_count}/3 negative: {'+'.join(horizons_negative)}) - "
-                    f"15m={pred_15m:.4f}, 30m={pred_30m:.4f}, 1h={pred_1h:.4f} - "
-                    f"profit={current_profit*100:.2f}%"
-                )
-                return f"sell_ml_strong_negative_{'+'.join(horizons_negative)}_{current_profit*100:.1f}%"
-            else:
-                # Profit too low for full exit, but signal is strong
-                # Log warning but don't exit yet
-                logger.info(
-                    f"{trade.pair}: Strong negative ML signal but profit too low - "
-                    f"weighted_avg={weighted_prediction:.4f}, "
-                    f"profit={current_profit*100:.2f}% < min={self.min_profit_for_overbought_exit.value*100:.2f}%"
-                )
-                return None
-        
-        # PARTIAL EXIT: Mild negative signal (2/3 negative but not strong)
-        elif self.ml_partial_exit_enabled:
-            filled_entries = trade.select_filled_orders(trade.entry_side)
+        # Exit if at least 2 out of 3 horizons are negative
+        if negative_count >= 2:
+            horizons_negative = []
+            if pred_15m < self.ml_exit_threshold_15m.value:
+                horizons_negative.append("15m")
+            if pred_30m < self.ml_exit_threshold_30m.value:
+                horizons_negative.append("30m")
+            if pred_1h < self.ml_exit_threshold_1h.value:
+                horizons_negative.append("1h")
             
-            # Skip first order (only evaluate DCA orders)
-            if len(filled_entries) > 1:
-                # Collect ALL profitable DCA orders
-                profitable_orders = []
-                total_partial_stake = 0.0
-                
-                for i, order in enumerate(filled_entries[1:], start=1):
-                    # Calculate profit for this specific order
-                    order_profit = (current_rate - order.average) / order.average
-                    
-                    # Check if this order is profitable enough
-                    if order_profit > self.ml_partial_exit_profit_threshold.value:
-                        profitable_orders.append({
-                            "index": i + 1,
-                            "profit": order_profit,
-                            "stake": order.cost
-                        })
-                        total_partial_stake += order.cost
-                
-                # If we have profitable DCA orders to close
-                if total_partial_stake > 0:
-                    # Log details of all orders being closed
-                    orders_detail = ", ".join([
-                        f"#{o['index']}({o['profit']*100:.1f}%)"
-                        for o in profitable_orders
-                    ])
-                    
-                    logger.info(
-                        f"{trade.pair}: PARTIAL EXIT - Mild negative ML signal - "
-                        f"weighted_avg={weighted_prediction:.4f} >= threshold={self.ml_strong_negative_threshold.value:.4f} - "
-                        f"({negative_count}/3 negative: {'+'.join(horizons_negative)}) - "
-                        f"15m={pred_15m:.4f}, 30m={pred_30m:.4f}, 1h={pred_1h:.4f} - "
-                        f"closing {len(profitable_orders)} DCA orders: {orders_detail}, "
-                        f"total_stake={total_partial_stake:.2f}"
-                    )
-                    
-                    # Return negative total stake to close ALL profitable DCA orders
-                    return (
-                        -total_partial_stake,
-                        f"partial_exit_{len(profitable_orders)}dca_{'+'.join(horizons_negative)}"
-                    )
+            from freqtrade.loggers import logger
+            logger.info(
+                f"{trade.pair}: Full exit triggered by ML - "
+                f"({negative_count}/3 negative: {'+'.join(horizons_negative)}) - "
+                f"15m={pred_15m:.4f}, 30m={pred_30m:.4f}, 1h={pred_1h:.4f} - "
+                f"profit={current_profit*100:.2f}%"
+            )
+            
+            return f"sell_ml_2of3_negative_{'+'.join(horizons_negative)}_{current_profit*100:.1f}%"
         
         return None
