@@ -2,7 +2,7 @@
 ProfitDrawdownDurationHyperOptLoss
 
 Loss function che massimizza profit con:
-- Penalità drawdown esponenziale continua (>20%) con formula (excess^1.5) * 6
+- Penalità drawdown esponenziale continua (>20%) con formula (excess^1.5) * 4.47
 - Penalità duration logaritmica (>5h)
 - Reward sul numero di trade (incentiva configurazioni con più trade)
 """
@@ -21,9 +21,9 @@ class ProfitDrawdownDurationHyperOptLoss(IHyperOptLoss):
     Defines the loss function for hyperopt.
 
     Massimizza profit totale con:
-    - Penalità drawdown esponenziale continua sopra 20%: (excess^1.5) * 6
+    - Penalità drawdown esponenziale continua sopra 20%: (excess^1.5) * 4.47
     - Penalità duration logaritmica per trade >5h
-    - Reward sul numero di trade (incentiva configurazioni con più trade)
+    - Reward sul numero di trade (incentiva configurazioni con più trade, cap 800)
     """
 
     @staticmethod
@@ -39,9 +39,9 @@ class ProfitDrawdownDurationHyperOptLoss(IHyperOptLoss):
         Objective function, returns smaller number for more optimal results.
 
         Massimizza profit con:
-        - Penalità drawdown esponenziale continua (>20%): (excess^1.5) * 6
+        - Penalità drawdown esponenziale continua (>20%): (excess^1.5) * 4.47
         - Penalità duration logaritmica (>5h)
-        - Reward sul numero di trade (incentiva scalping)
+        - Reward sul numero di trade (incentiva scalping, cap 800)
         """
         total_profit = results["profit_abs"].sum()
         trade_duration = results["trade_duration"].mean()
@@ -59,16 +59,16 @@ class ProfitDrawdownDurationHyperOptLoss(IHyperOptLoss):
         # ============================================================================
         # DRAWDOWN PENALTY (esponenziale continua sopra 20%)
         # ============================================================================
-        # Formula: (excess^1.5) * 6 per crescita progressiva smooth
+        # Formula: (excess^1.5) * 4.47 per crescita progressiva smooth
         # Calibrata per avere penalty simili alla versione a soglie fisse:
-        # - 25% drawdown → ~7% penalty (target 10%)
-        # - 35% drawdown → ~35% penalty (target 35%)
-        # - 45% drawdown → ~75% penalty (target 75%)
+        # - 25% drawdown → ~5% penalty
+        # - 35% drawdown → ~26% penalty
+        # - 45% drawdown → ~56% penalty
         if max_drawdown_pct > 0.20:
             excess = max_drawdown_pct - 0.20
             # Esponente 1.5 per crescita progressiva (tra lineare e quadratica)
-            # Multiplier 6 calibrato sui target
-            drawdown_penalty = (excess ** 1.5) * 6 * total_profit
+            # Multiplier 4.47 calibrato per 25% → 5% penalty
+            drawdown_penalty = (excess ** 1.5) * 4.47 * total_profit
         else:
             drawdown_penalty = 0
 

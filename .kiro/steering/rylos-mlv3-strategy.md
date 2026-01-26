@@ -461,9 +461,9 @@ result = -profit + drawdown_penalty + duration_penalty
 **Obiettivo**: Massimizzare profit totale con penalità drawdown (>20%) e duration (>5h)
 
 **Drawdown Penalty (Esponenziale Continua)**:
-- Formula: `(excess^1.5) * 6` dove excess = drawdown - 20%
+- Formula: `(excess^1.5) * 4.47` dove excess = drawdown - 20%
 - Crescita smooth e progressiva (no salti bruschi)
-- Esempi: 22% → 1.7%, 25% → 6.7%, 30% → 19%, 35% → 35%, 45% → 75%
+- Esempi: 22% → 1.3%, 25% → 5%, 30% → 14%, 35% → 26%, 45% → 56%
 
 **Duration Penalty Percentuale**:
 - 5h → 0% penalty
@@ -472,11 +472,11 @@ result = -profit + drawdown_penalty + duration_penalty
 
 **Esempi**:
 - 10,000 profit, 20% drawdown, 3h → result = -10,000 (best)
-- 10,000 profit, 25% drawdown, 3h → result = -9,330 (6.7% drawdown penalty)
-- 10,000 profit, 35% drawdown, 3h → result = -6,510 (34.9% drawdown penalty)
-- 10,000 profit, 45% drawdown, 3h → result = -2,500 (75% drawdown penalty)
+- 10,000 profit, 25% drawdown, 3h → result = -9,500 (5% drawdown penalty)
+- 10,000 profit, 35% drawdown, 3h → result = -7,400 (26% drawdown penalty)
+- 10,000 profit, 45% drawdown, 3h → result = -4,400 (56% drawdown penalty)
 - 10,000 profit, 20% drawdown, 24h → result = -7,000 (30% duration penalty)
-- 10,000 profit, 35% drawdown, 24h → result = -3,510 (35% drawdown + 30% duration)
+- 10,000 profit, 35% drawdown, 24h → result = -4,400 (26% drawdown + 30% duration)
 
 **Vantaggi**:
 - ✅ Massimizza profit assoluto (non ratio)
