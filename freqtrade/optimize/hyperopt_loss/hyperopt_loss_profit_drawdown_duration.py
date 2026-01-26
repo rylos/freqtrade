@@ -125,16 +125,17 @@ class ProfitDrawdownDurationHyperOptLoss(IHyperOptLoss):
         """
         Calculate reward based on number of trades to incentivize scalping.
         
-        Reward grows logarithmically until 300 trades, then linearly (more aggressive):
+        Reward grows logarithmically until 300 trades, then linearly until 800 (capped):
         - 100 trades → ~7% reward
         - 300 trades → ~14% reward (threshold)
-        - 500 trades → ~24% reward (+10% bonus)
-        - 800 trades → ~39% reward (+25% bonus)
-        - 1000 trades → ~49% reward (+35% bonus)
+        - 500 trades → ~24% reward
+        - 800 trades → ~39% reward (CAP)
+        - >800 trades → 39% reward (capped)
         
         Formula:
         - <300: log(1 + trade_count / 100) / 10
-        - ≥300: base + (excess / 100) * 0.05 (linear growth 5% per 100 trades)
+        - 300-800: base + (excess / 100) * 0.05 (linear growth 5% per 100 trades)
+        - >800: capped at 800 reward
         
         :param trade_count: Number of trades
         :param total_profit: Total profit to scale reward
@@ -143,17 +144,20 @@ class ProfitDrawdownDurationHyperOptLoss(IHyperOptLoss):
         if trade_count <= 0:
             return 0
         
-        # Soglia a 300 trade, poi crescita lineare aggressiva
-        if trade_count >= 300:
+        # Cap a 800 trade
+        capped_count = min(trade_count, 800)
+        
+        # Soglia a 300 trade, poi crescita lineare aggressiva fino a 800
+        if capped_count >= 300:
             # Base reward a 300 trade
             base_reward = math.log(1 + 300 / 100) / 10
             # Bonus lineare oltre 300 (5% per 100 trade)
-            excess = trade_count - 300
+            excess = capped_count - 300
             bonus = (excess / 100) * 0.05
             reward_percentage = base_reward + bonus
         else:
             # Crescita logaritmica fino a 300
-            reward_percentage = math.log(1 + trade_count / 100) / 10
+            reward_percentage = math.log(1 + capped_count / 100) / 10
         
         reward = reward_percentage * abs(total_profit)
         
