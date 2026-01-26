@@ -482,8 +482,13 @@ result = -profit + drawdown_penalty + duration_penalty
 - ✅ Massimizza profit assoluto (non ratio)
 - ✅ Penalizza drawdown >20% (esponenziale continua)
 - ✅ Penalizza duration >5h (logaritmica)
-- ✅ **Incentiva fortemente trade >300** (crescita lineare aggressiva)
+- ✅ **Incentiva fortemente trade 300-800** (crescita lineare, cap a 800)
 - ✅ Perfetto per scalping con focus su profit e risk control
+
+**Trade Count Reward (Cap a 800)**:
+- <300 trade: crescita logaritmica (~7% a 100, ~14% a 300)
+- 300-800 trade: crescita lineare aggressiva (+5% per 100 trade)
+- >800 trade: capped a 39% reward (previene dominanza)
 
 ## Alternative Loss Functions
 
