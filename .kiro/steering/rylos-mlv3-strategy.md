@@ -36,7 +36,7 @@ trailing_stop_positive_offset = 0.02  # +2%
 ```
 
 ### Loss Function Aggiornata
-- Drawdown penalty da **10%** (progressiva: 1x fino 20%, 2x fino 30%, 4x oltre)
+- Drawdown penalty da **20%** (progressiva: 2x fino 30%, 3x fino 40%, 5x oltre)
 - Duration penalty da **5h** (invariato)
 
 **Prossimi step**:
@@ -461,10 +461,10 @@ result = -profit + drawdown_penalty + duration_penalty
 **Obiettivo**: Massimizzare profit totale con penalità drawdown (>20%) e duration (>5h)
 
 **Drawdown Penalty**:
-- ≤10% → 0% penalty
-- 10-20% → penalty leggera (1x)
-- 20-30% → penalty aggressiva (2x)
-- >30% → penalty molto aggressiva (4x)
+- ≤20% → 0% penalty
+- 20-30% → penalty moderata (2x)
+- 30-40% → penalty aggressiva (3x)
+- >40% → penalty molto aggressiva (5x)
 
 **Duration Penalty Percentuale**:
 - 5h → 0% penalty
@@ -472,12 +472,12 @@ result = -profit + drawdown_penalty + duration_penalty
 - 24h → 30% penalty (log(20)/10)
 
 **Esempi**:
-- 10,000 profit, 8% drawdown, 3h → result = -10,000 (best)
-- 10,000 profit, 15% drawdown, 3h → result = -9,500 (5% drawdown penalty)
-- 10,000 profit, 25% drawdown, 3h → result = -8,000 (10% + 10% drawdown penalty)
-- 10,000 profit, 35% drawdown, 3h → result = -6,000 (10% + 10% + 20% drawdown penalty)
-- 10,000 profit, 8% drawdown, 24h → result = -7,000 (30% duration penalty)
-- 10,000 profit, 35% drawdown, 24h → result = -3,000 (40% drawdown + 30% duration)
+- 10,000 profit, 15% drawdown, 3h → result = -10,000 (best)
+- 10,000 profit, 25% drawdown, 3h → result = -9,000 (10% drawdown penalty)
+- 10,000 profit, 35% drawdown, 3h → result = -6,500 (35% drawdown penalty)
+- 10,000 profit, 45% drawdown, 3h → result = -2,500 (75% drawdown penalty)
+- 10,000 profit, 15% drawdown, 24h → result = -7,000 (30% duration penalty)
+- 10,000 profit, 35% drawdown, 24h → result = -3,500 (35% drawdown + 30% duration)
 
 **Vantaggi**:
 - ✅ Massimizza profit assoluto (non ratio)

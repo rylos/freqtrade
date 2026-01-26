@@ -2,7 +2,7 @@
 ProfitDrawdownDurationHyperOptLoss
 
 Loss function che massimizza profit con:
-- Penalità drawdown progressiva (>10%) con 3 livelli: 1x (10-20%), 2x (20-30%), 4x (>30%)
+- Penalità drawdown progressiva (>20%) con 3 livelli: 2x (20-30%), 3x (30-40%), 5x (>40%)
 - Penalità duration logaritmica (>5h)
 - Reward sul numero di trade (incentiva configurazioni con più trade)
 """
@@ -21,7 +21,7 @@ class ProfitDrawdownDurationHyperOptLoss(IHyperOptLoss):
     Defines the loss function for hyperopt.
 
     Massimizza profit totale con:
-    - Penalità drawdown progressiva solo se supera 10% (1x fino 20%, 2x fino 30%, 4x oltre)
+    - Penalità drawdown progressiva solo se supera 20% (2x fino 30%, 3x fino 40%, 5x oltre)
     - Penalità duration logaritmica per trade >5h
     - Reward sul numero di trade (incentiva configurazioni con più trade)
     """
@@ -39,7 +39,7 @@ class ProfitDrawdownDurationHyperOptLoss(IHyperOptLoss):
         Objective function, returns smaller number for more optimal results.
 
         Massimizza profit con:
-        - Penalità drawdown progressiva (>10%): 1x (10-20%), 2x (20-30%), 4x (>30%)
+        - Penalità drawdown progressiva (>20%): 2x (20-30%), 3x (30-40%), 5x (>40%)
         - Penalità duration logaritmica (>5h)
         - Reward sul numero di trade (incentiva scalping)
         """
@@ -57,25 +57,25 @@ class ProfitDrawdownDurationHyperOptLoss(IHyperOptLoss):
             max_drawdown_pct = 0
 
         # ============================================================================
-        # DRAWDOWN PENALTY (progressiva sopra 10%)
+        # DRAWDOWN PENALTY (progressiva sopra 20%)
         # ============================================================================
-        if max_drawdown_pct > 0.30:
-            # Penalità molto aggressiva oltre 30%
-            penalty_10_20 = 0.10 * total_profit * 1  # 10-20%: 1x
+        if max_drawdown_pct > 0.40:
+            # Penalità molto aggressiva oltre 40%
             penalty_20_30 = 0.10 * total_profit * 2  # 20-30%: 2x
-            excess_over_30 = max_drawdown_pct - 0.30
-            penalty_over_30 = excess_over_30 * total_profit * 4  # >30%: 4x
-            drawdown_penalty = penalty_10_20 + penalty_20_30 + penalty_over_30
+            penalty_30_40 = 0.10 * total_profit * 3  # 30-40%: 3x
+            excess_over_40 = max_drawdown_pct - 0.40
+            penalty_over_40 = excess_over_40 * total_profit * 5  # >40%: 5x
+            drawdown_penalty = penalty_20_30 + penalty_30_40 + penalty_over_40
+        elif max_drawdown_pct > 0.30:
+            # Penalità aggressiva tra 30-40%
+            penalty_20_30 = 0.10 * total_profit * 2  # 20-30%: 2x
+            drawdown_excess = max_drawdown_pct - 0.30
+            penalty_30_40 = drawdown_excess * total_profit * 3  # 30-40%: 3x
+            drawdown_penalty = penalty_20_30 + penalty_30_40
         elif max_drawdown_pct > 0.20:
-            # Penalità aggressiva tra 20-30%
-            penalty_10_20 = 0.10 * total_profit * 1  # 10-20%: 1x
+            # Penalità moderata tra 20-30%
             drawdown_excess = max_drawdown_pct - 0.20
-            penalty_20_30 = drawdown_excess * total_profit * 2  # 20-30%: 2x
-            drawdown_penalty = penalty_10_20 + penalty_20_30
-        elif max_drawdown_pct > 0.10:
-            # Penalità leggera tra 10-20%
-            drawdown_excess = max_drawdown_pct - 0.10
-            drawdown_penalty = drawdown_excess * total_profit * 1  # 10-20%: 1x
+            drawdown_penalty = drawdown_excess * total_profit * 2  # 20-30%: 2x
         else:
             drawdown_penalty = 0
 
