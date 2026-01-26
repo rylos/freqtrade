@@ -125,13 +125,16 @@ class ProfitDrawdownDurationHyperOptLoss(IHyperOptLoss):
         """
         Calculate reward based on number of trades to incentivize scalping.
         
-        Reward grows logarithmically with trade count:
-        - 100 trades → ~5% reward
-        - 300 trades → ~10% reward
-        - 500 trades → ~13% reward
-        - 1000 trades → ~17% reward
+        Reward grows logarithmically until 300 trades, then linearly (more aggressive):
+        - 100 trades → ~7% reward
+        - 300 trades → ~14% reward (threshold)
+        - 500 trades → ~24% reward (+10% bonus)
+        - 800 trades → ~39% reward (+25% bonus)
+        - 1000 trades → ~49% reward (+35% bonus)
         
-        Formula: log(1 + trade_count / 100) / 10 → percentage of profit
+        Formula:
+        - <300: log(1 + trade_count / 100) / 10
+        - ≥300: base + (excess / 100) * 0.05 (linear growth 5% per 100 trades)
         
         :param trade_count: Number of trades
         :param total_profit: Total profit to scale reward
@@ -140,11 +143,18 @@ class ProfitDrawdownDurationHyperOptLoss(IHyperOptLoss):
         if trade_count <= 0:
             return 0
         
-        # Reward logaritmico come percentuale del profit
-        # Formula: log(1 + count/100) / 10 → percentuale
-        # Es: 300 trade → log(4) / 10 = 0.139 = 13.9% del profit
-        #     500 trade → log(6) / 10 = 0.179 = 17.9% del profit
-        reward_percentage = math.log(1 + trade_count / 100) / 10
+        # Soglia a 300 trade, poi crescita lineare aggressiva
+        if trade_count >= 300:
+            # Base reward a 300 trade
+            base_reward = math.log(1 + 300 / 100) / 10
+            # Bonus lineare oltre 300 (5% per 100 trade)
+            excess = trade_count - 300
+            bonus = (excess / 100) * 0.05
+            reward_percentage = base_reward + bonus
+        else:
+            # Crescita logaritmica fino a 300
+            reward_percentage = math.log(1 + trade_count / 100) / 10
+        
         reward = reward_percentage * abs(total_profit)
         
         return reward

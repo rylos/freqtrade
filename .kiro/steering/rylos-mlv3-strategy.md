@@ -480,9 +480,9 @@ result = -profit + drawdown_penalty + duration_penalty
 
 **Vantaggi**:
 - ✅ Massimizza profit assoluto (non ratio)
-- ✅ Penalizza drawdown >20% (più conservativo)
+- ✅ Penalizza drawdown >20% (esponenziale continua)
 - ✅ Penalizza duration >5h (logaritmica)
-- ✅ Scaling corretto con percentuale
+- ✅ **Incentiva fortemente trade >300** (crescita lineare aggressiva)
 - ✅ Perfetto per scalping con focus su profit e risk control
 
 ## Alternative Loss Functions
