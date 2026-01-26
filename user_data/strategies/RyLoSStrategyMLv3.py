@@ -22,7 +22,7 @@ class RyLoSStrategyMLv3(IStrategy):
     # max_entry_position_adjustment rimosso - calcolato dinamicamente
     stoploss = -0.22  # Fallback stoploss (overridden by ML-driven logic in custom_stoploss)
 
-    # ROI disabilitato - usa solo custom_exit
+    # ROI disabilitato - usa solo custom_exit ML-driven
     minimal_roi = {
         "0": 0.5
     }
@@ -38,11 +38,11 @@ class RyLoSStrategyMLv3(IStrategy):
     # Strong positive predictions → tight distance (aggressive DCA)
     # Weak/negative predictions → wide distance (conservative DCA)
     ml_dca_distance_tight = DecimalParameter(
-        0.015, 0.025, default=0.018, space="buy", optimize=True,
+        0.015, 0.025, default=0.0199, space="buy", optimize=True,
         load=True, decimals=4
     )
     ml_dca_distance_wide = DecimalParameter(
-        0.035, 0.055, default=0.045, space="buy", optimize=True,
+        0.035, 0.055, default=0.0478, space="buy", optimize=True,
         load=True, decimals=4
     )
     
@@ -50,11 +50,11 @@ class RyLoSStrategyMLv3(IStrategy):
     # Strong positive → tight distance
     # Weak/negative → wide distance
     ml_dca_pred_min = DecimalParameter(
-        -0.02, 0.0, default=-0.01, space="buy", optimize=True,
+        -0.02, 0.0, default=-0.0128, space="buy", optimize=True,
         load=True, decimals=4
     )
     ml_dca_pred_max = DecimalParameter(
-        0.01, 0.04, default=0.02, space="buy", optimize=True,
+        0.01, 0.04, default=0.0256, space="buy", optimize=True,
         load=True, decimals=4
     )
     
@@ -63,17 +63,17 @@ class RyLoSStrategyMLv3(IStrategy):
     # ============================================================================
     
     first_order_pct = DecimalParameter(
-        0.005, 0.03, default=0.029, space="buy", optimize=True,
+        0.005, 0.03, default=0.0134, space="buy", optimize=True,
         load=True, decimals=4
     )
     dca_multiplier = DecimalParameter(
-        1.5, 3.0, default=1.991, space="buy", optimize=True,
+        1.5, 3.0, default=2.919, space="buy", optimize=True,
         load=True, decimals=3
     )
     
     # DCA dinamico basato su volatilità ATR
     dca_atr_multiplier = DecimalParameter(
-        0.5, 3.0, default=2.306, space="buy", optimize=True,
+        0.5, 3.0, default=0.642, space="buy", optimize=True,
         load=True, decimals=3
     )
 
@@ -83,9 +83,19 @@ class RyLoSStrategyMLv3(IStrategy):
         load=True
     )
 
-    # Exit parameters
-    min_profit_for_overbought_exit = DecimalParameter(
-        0.01, 0.10, default=0.017, space="sell", optimize=True,
+    # ============================================================================
+    # ML EXIT THRESHOLD (1 optimizable - sell space)
+    # ============================================================================
+    
+    # ML exit: focus on 5m prediction for fast scalping
+    ml_exit_threshold = DecimalParameter(
+        -0.01, 0.01, default=-0.001, space="sell", optimize=True,
+        load=True, decimals=4
+    )
+    
+    # Minimum profit required for ML exit (prevent premature exit)
+    min_profit_for_ml_exit = DecimalParameter(
+        0.005, 0.03, default=0.01, space="sell", optimize=True,
         load=True, decimals=4
     )
 
@@ -93,76 +103,68 @@ class RyLoSStrategyMLv3(IStrategy):
     auto_reduce_enabled = False  # Disabilitato - causava Loss in backtest
 
     # Trailing stop (disabilitato)
-    trailing_stop = False  # DISABILITATO per test ML
+    trailing_stop = False  # DISABILITATO - usa solo custom_exit ML-driven
 
     # ============================================================================
     # ML THRESHOLD PARAMETERS - WEIGHTED APPROACH (7 optimizable)
     # ============================================================================
     
     # Weighted prediction thresholds (single threshold per action)
+    # EXPANDED RANGES for scalping: allow more aggressive entry/exit
     ml_entry_threshold = DecimalParameter(
-        -0.01, 0.02, default=0.001, space="buy", optimize=True,
+        -0.01, 0.01, default=0.0049, space="buy", optimize=True,
         load=True, decimals=4
     )
     ml_dca_threshold = DecimalParameter(
-        -0.02, 0.02, default=0.0, space="buy", optimize=True,
-        load=True, decimals=4
-    )
-    ml_exit_threshold = DecimalParameter(
-        -0.03, 0.02, default=0.005, space="sell", optimize=True,
+        -0.02, 0.02, default=0.0021, space="buy", optimize=True,
         load=True, decimals=4
     )
     
     # Weights for each time horizon (normalized internally)
+    # EXPANDED RANGE: allow 5m to dominate for scalping (up to 3.0)
     ml_weight_5m = DecimalParameter(
-        0.1, 2.0, default=0.5, space="buy", optimize=True,
+        0.1, 3.0, default=0.23, space="buy", optimize=True,
         load=True, decimals=2
     )
     ml_weight_15m = DecimalParameter(
-        0.1, 2.0, default=1.0, space="buy", optimize=True,
+        0.1, 3.0, default=0.45, space="buy", optimize=True,
         load=True, decimals=2
     )
     ml_weight_30m = DecimalParameter(
-        0.1, 2.0, default=1.5, space="buy", optimize=True,
+        0.1, 3.0, default=1.95, space="buy", optimize=True,
         load=True, decimals=2
     )
     
     # ============================================================================
-    # ML-DRIVEN DYNAMIC STOPLOSS PARAMETERS (5 optimizable)
+    # CRASH DETECTION PARAMETERS (1 optimizable)
     # ============================================================================
     
-    # Enable/disable ML-driven dynamic stoploss
-    ml_dynamic_stoploss_enabled = True  # Set to False to use fixed stoploss
-    
-    # Dynamic stoploss range based on ML confidence
-    # When all 3 predictions are very negative → tight stoploss
-    # When predictions are neutral/positive → loose stoploss
-    ml_stoploss_tight = DecimalParameter(
-        -0.18, -0.08, default=-0.12, space="sell", optimize=True,
-        load=True, decimals=3
-    )
-    ml_stoploss_loose = DecimalParameter(
-        -0.30, -0.18, default=-0.25, space="sell", optimize=True,
+    # Crash detection: drop % in 15 minutes (3 candles @ 5m) to trigger immediate exit
+    crash_detection_threshold = DecimalParameter(
+        -0.10, -0.03, default=-0.06, space="sell", optimize=True,
         load=True, decimals=3
     )
     
-    # ML prediction range for stoploss mapping
-    # Very negative prediction → tight stoploss
-    # Neutral/positive prediction → loose stoploss
-    ml_stoploss_pred_min = DecimalParameter(
-        -0.10, -0.02, default=-0.05, space="sell", optimize=True,
-        load=True, decimals=4
-    )
-    ml_stoploss_pred_max = DecimalParameter(
-        -0.02, 0.02, default=0.0, space="sell", optimize=True,
-        load=True, decimals=4
-    )
+    # ============================================================================
+    # ML DRAWDOWN PREDICTION PARAMETERS (2 optimizable)
+    # ============================================================================
     
-    # Minimum loss to activate dynamic stoploss check
-    ml_stoploss_activation_loss = DecimalParameter(
-        -0.18, -0.05, default=-0.10, space="sell", optimize=True,
+    # ML drawdown prediction: exit if predicted drawdown exceeds threshold
+    ml_drawdown_1h_threshold = DecimalParameter(
+        -0.15, -0.05, default=-0.10, space="sell", optimize=True,
         load=True, decimals=3
     )
+    ml_drawdown_2h_threshold = DecimalParameter(
+        -0.20, -0.08, default=-0.15, space="sell", optimize=True,
+        load=True, decimals=3
+    )
+    
+    # ============================================================================
+    # FIXED STOPLOSS (fallback)
+    # ============================================================================
+    
+    # Fixed stoploss as fallback if no other level triggers
+    fixed_stoploss = -0.20  # -20% fixed stoploss
     
     # ============================================================================
     # ML CONFIDENCE-BASED STAKE SIZING (Optional - 2 optimizable)
@@ -173,11 +175,11 @@ class RyLoSStrategyMLv3(IStrategy):
     
     # Prediction range for confidence mapping
     ml_confidence_min = DecimalParameter(
-        -0.02, 0.0, default=-0.01, space="buy", optimize=True,
+        -0.02, 0.0, default=-0.0192, space="buy", optimize=True,
         load=True, decimals=4
     )
     ml_confidence_max = DecimalParameter(
-        0.01, 0.05, default=0.02, space="buy", optimize=True,
+        0.01, 0.05, default=0.0275, space="buy", optimize=True,
         load=True, decimals=4
     )
 
@@ -215,7 +217,7 @@ class RyLoSStrategyMLv3(IStrategy):
 
     def feature_engineering_expand_basic(self, dataframe: DataFrame, metadata: dict,
                                          **kwargs) -> DataFrame:
-        """Features base per FreqAI - Scalping optimized"""
+        """Features base per FreqAI - Scalping optimized with early warning signals"""
         dataframe["%-rsi"] = ta.RSI(dataframe["close"], timeperiod=10)
         dataframe["%-atr_pct"] = (ta.ATR(dataframe, timeperiod=10) / dataframe["close"]) * 100
 
@@ -258,6 +260,56 @@ class RyLoSStrategyMLv3(IStrategy):
         # Convert to Series for rolling operations
         obv_series = pd.Series(obv, index=dataframe.index)
         dataframe["%-obv_norm"] = obv_series / obv_series.rolling(window=20).mean()
+        
+        # ========================================================================
+        # EARLY WARNING FEATURES (for drawdown prediction)
+        # ========================================================================
+        # CRITICAL: Calculate ATR, RSI here (not in populate_indicators) because
+        # feature_engineering_expand_basic() is called BEFORE populate_indicators()
+        
+        # Calculate ATR for early warning features (convert to Series)
+        atr_temp = pd.Series(ta.ATR(dataframe, timeperiod=10), index=dataframe.index)
+        
+        # Calculate RSI for early warning features (convert to Series)
+        rsi_temp = pd.Series(ta.RSI(dataframe["close"], timeperiod=10), index=dataframe.index)
+        
+        # 1. ATR Spike - Sudden volatility increase (pre-crash signal)
+        dataframe["%-atr_spike"] = (
+            atr_temp / atr_temp.rolling(window=20).mean()
+        )
+        
+        # 2. Volume Spike - Unusual volume (panic selling/buying)
+        dataframe["%-volume_spike"] = (
+            dataframe["volume"] / dataframe["volume"].rolling(window=20).mean()
+        )
+        
+        # 3. RSI Divergence - Momentum reversal signal
+        dataframe["%-rsi_divergence"] = (
+            rsi_temp - rsi_temp.shift(5)
+        )
+        
+        # 4. Bollinger Band Squeeze - Pre-breakout indicator
+        # bb_upper and bb_lower already calculated above for bb_percent
+        bb_width = (bb_upper - bb_lower) / dataframe["close"]
+        dataframe["%-bb_squeeze"] = (
+            bb_width / bb_width.rolling(window=20).mean()
+        )
+        
+        # 5. MACD Histogram Decline - Momentum loss
+        dataframe["%-macd_decline"] = (
+            dataframe["%-macd_hist"] - dataframe["%-macd_hist"].shift(3)
+        )
+        
+        # 6. Distance to Recent Low - Support proximity
+        dataframe["%-distance_to_low"] = (
+            (dataframe["close"] - dataframe["low"].rolling(window=50).min()) / 
+            dataframe["close"]
+        )
+        
+        # 7. Price Acceleration - Rate of change of momentum
+        dataframe["%-price_acceleration"] = (
+            dataframe["%-pct_change"] - dataframe["%-pct_change"].shift(3)
+        )
 
         return dataframe
 
@@ -271,7 +323,10 @@ class RyLoSStrategyMLv3(IStrategy):
 
     def set_freqai_targets(self, dataframe: DataFrame, metadata: dict,
                           **kwargs) -> DataFrame:
-        """Multi-horizon targets: 5min, 15min, 30min price change predictions"""
+        """
+        Multi-horizon targets: 5min, 15min, 30min price change predictions
+        + Drawdown prediction for early stop
+        """
         # 5-minute target (1 candle @ 5m)
         dataframe["&-s_close_5m"] = (
             (dataframe["close"].shift(-1) - dataframe["close"]) /
@@ -288,6 +343,29 @@ class RyLoSStrategyMLv3(IStrategy):
         dataframe["&-s_close_30m"] = (
             (dataframe["close"].shift(-6) - dataframe["close"]) /
             dataframe["close"]
+        )
+        
+        # ========================================================================
+        # DRAWDOWN PREDICTION TARGETS (for early stop)
+        # ========================================================================
+        
+        # Predict worst drawdown in next 1 hour (12 candles @ 5m)
+        # This helps ML learn to predict when a trade will go bad
+        future_window_1h = 12
+        future_min_1h = dataframe["close"].shift(-future_window_1h).rolling(
+            window=future_window_1h, min_periods=1
+        ).min()
+        dataframe["&-s_max_drawdown_1h"] = (
+            (future_min_1h - dataframe["close"]) / dataframe["close"]
+        )
+        
+        # Predict worst drawdown in next 2 hours (24 candles @ 5m)
+        future_window_2h = 24
+        future_min_2h = dataframe["close"].shift(-future_window_2h).rolling(
+            window=future_window_2h, min_periods=1
+        ).min()
+        dataframe["&-s_max_drawdown_2h"] = (
+            (future_min_2h - dataframe["close"]) / dataframe["close"]
         )
 
         return dataframe
@@ -632,12 +710,11 @@ class RyLoSStrategyMLv3(IStrategy):
     def populate_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
         """
         CRITICAL: FreqAI must be called first.
-        Calculate ATR for strategy use (separate from %-atr_pct for ML).
+        Calculate minimal indicators for strategy use (ATR for DCA distance).
         """
         dataframe = self.freqai.start(dataframe, metadata, self)
         
-        # Calculate ATR for DCA distance calculation
-        # This is separate from %-atr_pct used by FreqAI
+        # ATR for dynamic DCA distance calculation
         dataframe["atr"] = ta.ATR(dataframe, timeperiod=10)
         
         return dataframe
@@ -705,129 +782,101 @@ class RyLoSStrategyMLv3(IStrategy):
         **kwargs,
     ) -> float:
         """
-        ML-driven dynamic stoploss.
+        Simplified ML-driven stoploss with 5 clean levels.
         
-        Stoploss becomes tighter when ML predicts strong downtrend,
-        looser when ML is neutral/positive.
-        
-        Only activates when:
-        1. Loss exceeds activation threshold
-        2. DCA is exhausted (no more capital or max orders reached)
+        LIVELLO 0: ML Drawdown Prediction (preventive exit)
+        LIVELLO 1: Crash Detection (reactive exit)
+        LIVELLO 2: Breakeven Move (protect profit)
+        LIVELLO 3: Trailing Stop (maximize profit)
+        LIVELLO 4: Fixed Stoploss (fallback)
         
         Returns:
             Stoploss value (negative float, e.g., -0.15 for -15%)
         """
-        if not self.ml_dynamic_stoploss_enabled:
-            return self.stoploss  # Use fixed stoploss
-        
-        # Only activate dynamic stoploss if loss exceeds threshold
-        if current_profit >= self.ml_stoploss_activation_loss.value:
-            return -1  # No stoploss (let DCA work)
-        
-        # CRITICAL: Only use dynamic stoploss if DCA is exhausted
-        if self.can_dca_further(trade):
-            from freqtrade.loggers import logger
-            logger.info(
-                f"{pair}: Dynamic stoploss NOT active - DCA still possible - "
-                f"loss={current_profit*100:.2f}%, entries={trade.nr_of_successful_entries}"
-            )
-            return -1  # No stoploss (let DCA work)
-        
-        # Get ML predictions for all 3 horizons
-        pred_5m, pred_15m, pred_30m = self.get_ml_predictions(trade.pair)
-        avg_prediction = (pred_5m + pred_15m + pred_30m) / 3
-        
-        # Map prediction to stoploss: very negative → tight, neutral/positive → loose
-        min_pred = self.ml_stoploss_pred_min.value
-        max_pred = self.ml_stoploss_pred_max.value
-        
-        # Clamp prediction to range
-        clamped_pred = max(min_pred, min(avg_prediction, max_pred))
-        
-        # Linear interpolation: [min_pred, max_pred] → [tight, loose]
-        if max_pred > min_pred:
-            stoploss_ratio = (clamped_pred - min_pred) / (max_pred - min_pred)
-        else:
-            stoploss_ratio = 0.5  # Fallback to middle
-        
-        dynamic_stoploss = (
-            self.ml_stoploss_tight.value +
-            stoploss_ratio * (self.ml_stoploss_loose.value - self.ml_stoploss_tight.value)
-        )
-        
         from freqtrade.loggers import logger
-        logger.warning(
-            f"{pair}: Dynamic stoploss ACTIVE - DCA exhausted - "
-            f"avg_pred={avg_prediction:.4f}, "
-            f"stoploss={dynamic_stoploss:.4f} "
-            f"(tight={self.ml_stoploss_tight.value:.4f}, "
-            f"loose={self.ml_stoploss_loose.value:.4f}) - "
-            f"loss={current_profit*100:.2f}%, entries={trade.nr_of_successful_entries}"
+        
+        dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
+        
+        # ========================================================================
+        # LIVELLO 0: ML DRAWDOWN PREDICTION (preventive exit - massima priorità)
+        # ========================================================================
+        if len(dataframe) >= 1:
+            current_candle = dataframe.iloc[-1]
+            
+            # Get ML drawdown predictions
+            pred_dd_1h = current_candle.get("&-s_max_drawdown_1h", 0.0)
+            pred_dd_2h = current_candle.get("&-s_max_drawdown_2h", 0.0)
+            
+            # Exit if ML predicts large drawdown
+            if (pred_dd_1h < self.ml_drawdown_1h_threshold.value or 
+                pred_dd_2h < self.ml_drawdown_2h_threshold.value):
+                logger.warning(
+                    f"{pair}: ML DRAWDOWN PREDICTION - "
+                    f"1h={pred_dd_1h*100:.1f}% (threshold={self.ml_drawdown_1h_threshold.value*100:.1f}%), "
+                    f"2h={pred_dd_2h*100:.1f}% (threshold={self.ml_drawdown_2h_threshold.value*100:.1f}%) - "
+                    f"Preventive exit at {current_profit*100:.2f}%"
+                )
+                return current_profit + 0.005  # Exit with small buffer
+        
+        # ========================================================================
+        # LIVELLO 1: CRASH DETECTION (reactive exit)
+        # ========================================================================
+        if len(dataframe) >= 4:
+            # Calcola drop % nelle ultime 3 candele (15 minuti)
+            price_3_ago = dataframe.iloc[-4]["close"]
+            price_2_ago = dataframe.iloc[-3]["close"]
+            price_1_ago = dataframe.iloc[-2]["close"]
+            current_price = dataframe.iloc[-1]["close"]
+            
+            # Crash detection: drop > threshold in 15min E confermato per 2 candele
+            drop_3_candles = (current_price - price_3_ago) / price_3_ago
+            drop_sustained = (current_price < price_2_ago and current_price < price_1_ago)
+            
+            if drop_3_candles < self.crash_detection_threshold.value and drop_sustained:
+                # Crash confermato → exit immediato
+                logger.warning(
+                    f"{pair}: CRASH DETECTED! "
+                    f"Drop={drop_3_candles*100:.2f}% in 15min "
+                    f"(threshold={self.crash_detection_threshold.value*100:.2f}%) - "
+                    f"Immediate exit at {current_profit*100:.2f}%"
+                )
+                return current_profit + 0.01  # Exit immediato con piccolo buffer
+        
+        # ========================================================================
+        # LIVELLO 2: BREAKEVEN MOVE (protect profit)
+        # ========================================================================
+        if current_profit > 0.02:  # Dopo +2% profit
+            # Muovi stoploss a breakeven (0%)
+            logger.info(
+                f"{pair}: Breakeven stoploss active - "
+                f"profit={current_profit*100:.2f}% > 2%"
+            )
+            return 0.005  # Piccolo profit garantito
+        
+        # ========================================================================
+        # LIVELLO 3: TRAILING STOP (maximize profit)
+        # ========================================================================
+        if current_profit > 0:
+            # Trail 3% behind current profit
+            trailing_stoploss = current_profit - 0.03
+            # Don't go below fixed stoploss
+            final_stoploss = max(trailing_stoploss, self.fixed_stoploss)
+            logger.info(
+                f"{pair}: Trailing stoploss active - "
+                f"profit={current_profit*100:.2f}%, "
+                f"trailing={trailing_stoploss:.4f}, "
+                f"final={final_stoploss:.4f}"
+            )
+            return final_stoploss
+        
+        # ========================================================================
+        # LIVELLO 4: FIXED STOPLOSS (fallback)
+        # ========================================================================
+        logger.debug(
+            f"{pair}: Fixed stoploss - "
+            f"stoploss={self.fixed_stoploss:.4f}"
         )
-        
-        return dynamic_stoploss
-        """
-        Check if DCA is still possible for this trade.
-        
-        Returns:
-            True if DCA can continue, False if exhausted (capital or max orders)
-        """
-        total_balance = self.wallets.get_total_stake_amount()
-        max_open_trades = self.config.get("max_open_trades", 1)
-        
-        # Check max orders limit
-        max_orders = self.calculate_max_orders(total_balance)
-        if trade.nr_of_successful_entries > max_orders:
-            return False
-        
-        # Check global exposure limit
-        global_limit = total_balance * 4
-        current_global_exposure = self.get_total_position_value()
-        if current_global_exposure >= global_limit * 0.95:
-            return False
-        
-        # Check available balance for next DCA
-        available_balance = self.wallets.get_available_stake_amount()
-        entry_count = trade.nr_of_successful_entries
-        next_stake_pct = self.first_order_pct.value * (self.dca_multiplier.value**entry_count)
-        next_stake = total_balance * next_stake_pct
-        
-        if next_stake > available_balance:
-            return False
-        
-        return True
-
-    def can_dca_further(self, trade: Trade) -> bool:
-        """
-        Check if DCA is still possible for this trade.
-        
-        Returns:
-            True if DCA can continue, False if exhausted (capital or max orders)
-        """
-        total_balance = self.wallets.get_total_stake_amount()
-        max_open_trades = self.config.get("max_open_trades", 1)
-        
-        # Check max orders limit
-        max_orders = self.calculate_max_orders(total_balance)
-        if trade.nr_of_successful_entries > max_orders:
-            return False
-        
-        # Check global exposure limit
-        global_limit = total_balance * 4
-        current_global_exposure = self.get_total_position_value()
-        if current_global_exposure >= global_limit * 0.95:
-            return False
-        
-        # Check available balance for next DCA
-        available_balance = self.wallets.get_available_stake_amount()
-        entry_count = trade.nr_of_successful_entries
-        next_stake_pct = self.first_order_pct.value * (self.dca_multiplier.value**entry_count)
-        next_stake = total_balance * next_stake_pct
-        
-        if next_stake > available_balance:
-            return False
-        
-        return True
+        return self.fixed_stoploss
 
     def custom_exit(
         self,
@@ -839,32 +888,28 @@ class RyLoSStrategyMLv3(IStrategy):
         **kwargs,
     ):
         """
-        ML-driven exit logic using weighted predictions.
+        ML-driven exit with focus on 5m prediction for fast scalping.
         
         Exit when:
-        - Profit > min_profit_for_overbought_exit AND
-        - Weighted prediction < ml_exit_threshold
+        - Profit > min_profit_for_ml_exit AND
+        - 5m prediction < ml_exit_threshold (focus on immediate future)
         """
-        # Get weighted ML prediction
-        weighted_pred = self.get_weighted_ml_prediction(trade.pair)
+        from freqtrade.loggers import logger
         
-        # ============================================================================
-        # PROFIT EXIT (weighted prediction)
-        # ============================================================================
-        if current_profit > self.min_profit_for_overbought_exit.value:
-            if weighted_pred < self.ml_exit_threshold.value:
-                from freqtrade.loggers import logger
-                pred_5m, pred_15m, pred_30m = self.get_ml_predictions(trade.pair)
+        # Only check ML exit if we have minimum profit
+        if current_profit > self.min_profit_for_ml_exit.value:
+            # Get ML predictions
+            pred_5m, pred_15m, pred_30m = self.get_ml_predictions(pair)
+            
+            # FOCUS ON 5M: Exit if 5m prediction is negative
+            # This gives fastest reaction for scalping
+            if pred_5m < self.ml_exit_threshold.value:
                 logger.info(
-                    f"{trade.pair}: Profit exit triggered by ML weighted prediction - "
-                    f"weighted={weighted_pred:.4f} (threshold={self.ml_exit_threshold.value:.4f}) - "
-                    f"5m={pred_5m:.4f}, 15m={pred_15m:.4f}, 30m={pred_30m:.4f} - "
-                    f"weights: 5m={self.ml_weight_5m.value:.2f}, "
-                    f"15m={self.ml_weight_15m.value:.2f}, "
-                    f"30m={self.ml_weight_30m.value:.2f} - "
+                    f"{pair}: ML exit triggered (5m focus) - "
+                    f"5m={pred_5m:.4f} < threshold={self.ml_exit_threshold.value:.4f} - "
+                    f"15m={pred_15m:.4f}, 30m={pred_30m:.4f} - "
                     f"profit={current_profit*100:.2f}%"
                 )
-                
-                return f"sell_ml_w{weighted_pred:.4f}_{current_profit*100:.1f}%"
+                return f"sell_ml_5m{pred_5m:.4f}_{current_profit*100:+.1f}%"
         
         return None

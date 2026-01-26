@@ -2,6 +2,48 @@
 
 Strategia ML-driven con predizioni pesate su 3 orizzonti temporali (5m, 15m, 30m).
 
+## Ultimo Hyperopt (2026-01-26)
+
+**Risultati**: 184 trade, 98.9% win rate, +1,375% profit, 33.49% max drawdown, 20h 35m avg duration
+
+**Analisi**:
+- ✅ Win rate eccellente (182/184)
+- ✅ Profit assoluto molto alto (137k USDT)
+- ⚠️ Duration troppo alta (20h vs target 5h) → penalty logaritmica pesante
+- ⚠️ Drawdown elevato (33.49% > 20%) → penalty attiva con nuova loss function
+- ⚠️ Exit molto conservativo (9.51% profit minimo) → trade lunghi
+
+## Modifiche per Scalping (2026-01-26)
+
+### Range Espansi
+- `ml_entry_threshold`: -0.01 to 0.01 (era -0.01 to 0.02) → entry più facile
+- `ml_exit_threshold`: -0.01 to 0.01 (era -0.03 to 0.02) → exit più reattivo
+- `min_profit_for_overbought_exit`: 0.005 to 0.10 (era 0.01 to 0.10) → da 0.5%
+- `ml_weight_*`: 0.1 to 3.0 (era 0.1 to 2.0) → 5m può dominare
+
+### ROI Table Attivata
+```python
+minimal_roi = {
+    "0": 0.10, "30": 0.05, "60": 0.03, "120": 0.02, "240": 0.01
+}
+```
+
+### Trailing Stop Attivato
+```python
+trailing_stop = True
+trailing_stop_positive = 0.01  # 1%
+trailing_stop_positive_offset = 0.02  # +2%
+```
+
+### Loss Function Aggiornata
+- Drawdown penalty da **20%** (era 30%)
+- Duration penalty da **5h** (invariato)
+
+**Prossimi step**:
+1. Copiare file su debian.ts
+2. Lanciare hyperopt con `--spaces buy sell roi trailing`
+3. Aspettarsi: 500-1000 trade, profit medio 2-3%, duration 1-3h
+
 ## Architettura
 
 ### Predizioni ML (3 Target)
@@ -21,61 +63,99 @@ weighted_pred = (
 ) / (ml_weight_5m + ml_weight_15m + ml_weight_30m)
 ```
 
-## Parametri Ottimizzabili (16 totali)
+## Parametri Ottimizzabili (18 totali) - RANGE ESPANSI PER SCALPING (2026-01-26)
 
-### ML Weights (3 parametri - buy space)
+### ML Weights (3 parametri - buy space) - RANGE ESPANSO
 ```python
-ml_weight_5m    = 0.1 to 2.0  (default: 0.5)   # Peso orizzonte 5m
-ml_weight_15m   = 0.1 to 2.0  (default: 1.0)   # Peso orizzonte 15m
-ml_weight_30m   = 0.1 to 2.0  (default: 1.5)   # Peso orizzonte 30m
+ml_weight_5m    = 0.1 to 3.0  (default: 0.23)   # Peso orizzonte 5m - ESPANSO per scalping
+ml_weight_15m   = 0.1 to 3.0  (default: 0.45)   # Peso orizzonte 15m - ESPANSO
+ml_weight_30m   = 0.1 to 3.0  (default: 1.95)   # Peso orizzonte 30m - ESPANSO
 ```
 
 **Interpretazione**:
-- Peso basso (0.1-0.5): orizzonte poco affidabile/rumoroso
-- Peso medio (0.8-1.2): orizzonte standard
-- Peso alto (1.5-2.0): orizzonte più affidabile per decisioni
+- Range espanso a 3.0 permette al 5m di dominare per scalping rapido
+- Hyperopt può trovare configurazioni aggressive (es. 5m=2.5, 15m=1.0, 30m=0.5)
 
-### ML Thresholds (3 parametri)
+### ML Thresholds (3 parametri) - RANGE ESPANSO
 ```python
-ml_entry_threshold = -0.01 to 0.02  (default: 0.001, buy space)
-ml_dca_threshold   = -0.02 to 0.02  (default: 0.0, buy space)
-ml_exit_threshold  = -0.02 to 0.005 (default: -0.001, sell space)
+ml_entry_threshold = -0.01 to 0.01  (default: 0.0049, buy space)   # ESPANSO: entry più facile
+ml_dca_threshold   = -0.02 to 0.02  (default: 0.0021, buy space)   # Invariato
+ml_exit_threshold  = -0.01 to 0.01  (default: -0.001, sell space)  # REINTEGRATO: exit ML-driven
 ```
+
+**Cambiamenti**:
+- `ml_entry_threshold`: ora può scendere a -0.01 (entry anche con predizioni negative)
+- `ml_exit_threshold`: **REINTEGRATO** - exit quando weighted_pred < threshold
+- Range ±0.01 per exit più reattivo
 
 ### DCA Core (3 parametri - buy space)
 ```python
-first_order_pct     = 0.005 to 0.03  (default: 0.029)  # % balance primo ordine
-dca_multiplier      = 1.5 to 3.0     (default: 1.991)  # Moltiplicatore stake
-dca_atr_multiplier  = 0.5 to 3.0     (default: 2.306)  # Peso ATR su distanza
+first_order_pct     = 0.005 to 0.03  (default: 0.0134)  # % balance primo ordine
+dca_multiplier      = 1.5 to 3.0     (default: 2.919)   # Moltiplicatore stake
+dca_atr_multiplier  = 0.5 to 3.0     (default: 0.642)   # Peso ATR su distanza
 ```
 
 ### ML Dynamic DCA Distance (4 parametri - buy space)
 ```python
-ml_dca_distance_tight = 0.015 to 0.025  (default: 0.018)  # Distanza stretta
-ml_dca_distance_wide  = 0.035 to 0.055  (default: 0.045)  # Distanza ampia
-ml_dca_pred_min       = -0.02 to 0.0    (default: -0.01)  # Pred min mapping
-ml_dca_pred_max       = 0.01 to 0.04    (default: 0.02)   # Pred max mapping
+ml_dca_distance_tight = 0.015 to 0.025  (default: 0.0199)  # Distanza stretta
+ml_dca_distance_wide  = 0.035 to 0.055  (default: 0.0478)  # Distanza ampia
+ml_dca_pred_min       = -0.02 to 0.0    (default: -0.0128) # Pred min mapping
+ml_dca_pred_max       = 0.01 to 0.04    (default: 0.0256)  # Pred max mapping
 ```
-
-**Logica**: Predizioni positive → distanza tight (DCA aggressivo), predizioni negative → distanza wide (DCA conservativo)
 
 ### ML Dynamic Stoploss (5 parametri - sell space)
 ```python
-ml_stoploss_tight           = -0.18 to -0.08  (default: -0.12)
-ml_stoploss_loose           = -0.30 to -0.18  (default: -0.25)
-ml_stoploss_pred_min        = -0.10 to -0.02  (default: -0.05)
-ml_stoploss_pred_max        = -0.02 to 0.02   (default: 0.0)
-ml_stoploss_activation_loss = -0.18 to -0.05  (default: -0.10)
+ml_stoploss_tight           = -0.18 to -0.08  (default: -0.112)
+ml_stoploss_loose           = -0.30 to -0.18  (default: -0.219)
+ml_stoploss_pred_min        = -0.10 to -0.02  (default: -0.0918)
+ml_stoploss_pred_max        = -0.02 to 0.02   (default: -0.0066)
+ml_stoploss_activation_loss = -0.18 to -0.05  (default: -0.12)
 ```
 
-**Attivazione**: Solo quando loss > activation_loss E DCA esaurito (no capital/max orders)
-
-### Exit (1 parametro - sell space)
+### Crash Detection (1 parametro - sell space)
 ```python
-min_profit_for_overbought_exit = 0.01 to 0.10  (default: 0.017)  # 1.7%
+crash_detection_threshold = -0.10 to -0.03  (default: -0.06)  # Drop % in 15min per exit immediato
 ```
 
-## Logica Entry/DCA/Exit
+**CRITICO**: Hyperopt trova la soglia ottimale per crash detection (da -10% a -3%)
+
+### Exit Multi-Oscillator (7 parametri - sell space)
+```python
+min_profit_for_overbought_exit = 0.005 to 0.10  (default: 0.017)  # ESPANSO: da 0.5% a 10%
+rsi_overbought_threshold       = 60 to 85       (default: 63.146)
+bb_overbought_threshold        = 0.7 to 0.9     (default: 0.871)
+atr_overbought_multiplier      = 0.5 to 2.0     (default: 0.556)
+stochrsi_overbought_threshold  = 70 to 100      (default: 94.809)
+williams_overbought_threshold  = -30 to -10     (default: -24.965)
+min_overbought_count           = 3 to 5         (default: 4)
+```
+
+**CRITICO**: Range espanso permette exit da 0.5% (scalping aggressivo) a 10% (conservativo)
+
+### ROI Table (5 parametri - roi space) - NUOVO
+```python
+minimal_roi = {
+    "0": 0.10,    # 10% immediate profit target
+    "30": 0.05,   # 5% after 30 minutes
+    "60": 0.03,   # 3% after 1 hour
+    "120": 0.02,  # 2% after 2 hours
+    "240": 0.01   # 1% after 4 hours (force exit)
+}
+```
+
+**Ottimizzabile con**: `--spaces roi`
+
+### Trailing Stop (3 parametri - trailing space) - NUOVO
+```python
+trailing_stop = True
+trailing_stop_positive = 0.01  # 1% trailing distance
+trailing_stop_positive_offset = 0.02  # Activate at +2% profit
+trailing_only_offset_is_reached = True
+```
+
+**Ottimizzabile con**: `--spaces trailing`
+
+## Logica Entry/DCA/Exit/Stoploss
 
 ### First Entry
 ```python
@@ -103,15 +183,125 @@ stake = first_order_pct * (dca_multiplier ^ entry_count)
 "dca_ml_w0.0089_-5.2%"
 ```
 
-### Exit
+### Exit (Dual Strategy) - REINTEGRATO ML EXIT
+
+#### EXIT 1: ML-Driven (Priorità)
 ```python
 # Condizioni (entrambe devono essere vere)
-1. current_profit > min_profit_for_overbought_exit
-2. weighted_pred < ml_exit_threshold
+1. current_profit > min_profit_for_overbought_exit  # default: 1.7%
+2. weighted_pred < ml_exit_threshold                # default: -0.001
+
+# Comportamento
+→ Exit immediato quando ML prevede downtrend
 
 # Tag esempio
 "sell_ml_w-0.0032_+8.5%"
 ```
+
+**Vantaggi**:
+- ✅ Exit proattivo basato su ML predictions
+- ✅ Non aspetta overbought, usa confidence ML
+- ✅ Hyperoptabile: trova soglia ottimale (-0.01 a +0.01)
+
+#### EXIT 2: Multi-Oscillator Overbought (Fallback)
+```python
+# Condizioni (tutte devono essere vere)
+1. current_profit > min_profit_for_overbought_exit  # default: 1.7%
+2. overbought_count >= min_overbought_count         # default: 4/5 oscillatori
+3. current_candle["close"] > current_candle["open"] # Candela verde
+
+# Oscillatori controllati (5 totali)
+- RSI > 63.146
+- BB% > 0.871
+- ATR > high - (atr × 0.556)
+- StochRSI > 94.809
+- Williams %R > -24.965
+
+# Tag esempio
+"sell_overbought_(rsi+bb+atr+stochrsi)"
+```
+
+**Vantaggi**:
+- ✅ Fallback affidabile se ML non trigger
+- ✅ Conferma con candela verde (momentum)
+- ✅ Multi-oscillator riduce falsi segnali
+
+**Priorità**: ML exit viene controllato **prima** del multi-oscillator
+
+### Stoploss Smart Ibrido (4 Livelli) - NUOVO
+
+#### LIVELLO 1: Crash Detection con Anti-Wick
+```python
+# Condizioni (entrambe devono essere vere)
+1. Drop > crash_detection_threshold in 15min (3 candles)
+2. Drop confermato per 2 candele consecutive
+
+# Comportamento
+→ Exit immediato con piccolo buffer (+0.01)
+
+# Esempio
+Drop -6.5% in 15min, confermato → exit immediato
+```
+
+**Vantaggi**:
+- ✅ Protegge da flash crash e dump improvvisi
+- ✅ Anti-wick: richiede conferma su 2 candele (evita exit su wick temporanei)
+- ✅ Hyperoptabile: trova soglia ottimale (-10% a -3%)
+
+#### LIVELLO 2: Breakeven Move
+```python
+# Condizione
+if current_profit > 0.02:  # +2% profit
+    return 0.005  # Muovi stoploss a breakeven (+0.5%)
+```
+
+**Vantaggi**:
+- ✅ Protegge capital dopo primi profit
+- ✅ Non interferisce con DCA iniziale
+- ✅ Garantisce piccolo profit minimo
+
+#### LIVELLO 3: ML-Driven Dynamic (DCA esaurito)
+```python
+# Condizioni
+1. Loss > ml_stoploss_activation_loss (default: -12%)
+2. DCA esaurito (no capital o max orders)
+
+# Comportamento
+→ Stoploss dinamico basato su ML predictions
+→ Tight (-11.2%) se ML molto negativo
+→ Loose (-21.9%) se ML neutrale/positivo
+```
+
+**Vantaggi**:
+- ✅ Stoploss intelligente basato su ML confidence
+- ✅ Si attiva solo quando DCA non può più recuperare
+- ✅ Evita exit prematuri durante DCA recovery
+
+#### LIVELLO 4: Trailing Progressive (DCA attivo)
+```python
+# Stoploss progressivo basato su entry count
+entry_count <= 2: -15%
+entry_count <= 4: -20%
+entry_count <= 6: -25%
+entry_count > 6:  -30%
+
+# Trailing se in profit
+if current_profit > 0:
+    trailing_stoploss = current_profit - 0.03  # Trail 3% dietro
+    return max(trailing_stoploss, base_stoploss)
+```
+
+**Vantaggi**:
+- ✅ Stoploss si allenta con più DCA (più spazio per recovery)
+- ✅ Trailing attivo quando in profit (protegge guadagni)
+- ✅ Non interferisce con logica DCA
+
+### Priorità Livelli Stoploss
+
+1. **Crash Detection** (massima priorità) → exit immediato
+2. **Breakeven Move** → se profit > 2%
+3. **ML-Driven** → se DCA esaurito E loss > -12%
+4. **Trailing Progressive** → default durante DCA attivo
 
 ## Features ML (19 totali)
 
@@ -249,10 +439,10 @@ freqtrade hyperopt \
 total_profit = results["profit_abs"].sum()
 trade_duration = results["trade_duration"].mean()
 
-# Drawdown penalty (progressiva sopra 30%)
-if max_drawdown > 40%:
+# Drawdown penalty (progressiva sopra 20%)
+if max_drawdown > 30%:
     drawdown_penalty = base + (excess * profit * 4)  # Aggressiva
-elif max_drawdown > 30%:
+elif max_drawdown > 20%:
     drawdown_penalty = (excess * profit * 2)  # Moderata
 else:
     drawdown_penalty = 0
@@ -268,7 +458,12 @@ else:
 result = -profit + drawdown_penalty + duration_penalty
 ```
 
-**Obiettivo**: Massimizzare profit totale con penalità drawdown (>30%) e duration (>5h)
+**Obiettivo**: Massimizzare profit totale con penalità drawdown (>20%) e duration (>5h)
+
+**Drawdown Penalty**:
+- ≤20% → 0% penalty
+- 20-30% → penalty moderata (2x)
+- >30% → penalty aggressiva (4x)
 
 **Duration Penalty Percentuale**:
 - 5h → 0% penalty
@@ -276,16 +471,17 @@ result = -profit + drawdown_penalty + duration_penalty
 - 24h → 30% penalty (log(20)/10)
 
 **Esempi**:
-- 10,000 profit in 3h → result = -10,000 (best)
-- 10,000 profit in 24h → result = -7,000 (30% penalty)
-- 1,000 profit in 3h → result = -1,000 (worst)
+- 10,000 profit, 15% drawdown, 3h → result = -10,000 (best)
+- 10,000 profit, 25% drawdown, 3h → result = -9,000 (5% drawdown penalty)
+- 10,000 profit, 15% drawdown, 24h → result = -7,000 (30% duration penalty)
+- 10,000 profit, 35% drawdown, 24h → result = -4,000 (30% drawdown + 30% duration)
 
 **Vantaggi**:
 - ✅ Massimizza profit assoluto (non ratio)
-- ✅ Penalizza drawdown >30% (progressiva)
+- ✅ Penalizza drawdown >20% (più conservativo)
 - ✅ Penalizza duration >5h (logaritmica)
 - ✅ Scaling corretto con percentuale
-- ✅ Perfetto per scalping con focus su profit
+- ✅ Perfetto per scalping con focus su profit e risk control
 
 ## Alternative Loss Functions
 

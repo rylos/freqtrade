@@ -1,7 +1,9 @@
 """
 ProfitDrawdownDurationHyperOptLoss
 
-Loss function che massimizza profit con penalità drawdown (>30%) e duration (>5h)
+Loss function che massimizza profit con:
+- Penalità drawdown (>20%) e duration (>5h)
+- Reward sul numero di trade (incentiva configurazioni con più trade)
 """
 
 import math
@@ -18,8 +20,9 @@ class ProfitDrawdownDurationHyperOptLoss(IHyperOptLoss):
     Defines the loss function for hyperopt.
 
     Massimizza profit totale con:
-    - Penalità drawdown solo se supera 30%
+    - Penalità drawdown solo se supera 20%
     - Penalità duration logaritmica per trade >5h
+    - Reward sul numero di trade (incentiva configurazioni con più trade)
     """
 
     @staticmethod
@@ -34,10 +37,13 @@ class ProfitDrawdownDurationHyperOptLoss(IHyperOptLoss):
         """
         Objective function, returns smaller number for more optimal results.
 
-        Massimizza profit con penalità drawdown (>30%) e duration (>5h)
+        Massimizza profit con:
+        - Penalità drawdown (>20%) e duration (>5h)
+        - Reward sul numero di trade (incentiva scalping)
         """
         total_profit = results["profit_abs"].sum()
         trade_duration = results["trade_duration"].mean()
+        trade_count = len(results)
         
         # Calcola max drawdown
         try:
@@ -49,17 +55,17 @@ class ProfitDrawdownDurationHyperOptLoss(IHyperOptLoss):
             max_drawdown_pct = 0
 
         # ============================================================================
-        # DRAWDOWN PENALTY (progressiva sopra 30%)
+        # DRAWDOWN PENALTY (progressiva sopra 20%)
         # ============================================================================
-        if max_drawdown_pct > 0.40:
-            # Penalità aggressiva oltre 40%
-            base_penalty = 0.10 * total_profit * 2  # 30-40%: penalty fissa
-            excess_over_40 = max_drawdown_pct - 0.40
-            extra_penalty = excess_over_40 * total_profit * 4  # 4x oltre 40%
+        if max_drawdown_pct > 0.30:
+            # Penalità aggressiva oltre 30%
+            base_penalty = 0.10 * total_profit * 2  # 20-30%: penalty fissa
+            excess_over_30 = max_drawdown_pct - 0.30
+            extra_penalty = excess_over_30 * total_profit * 4  # 4x oltre 30%
             drawdown_penalty = base_penalty + extra_penalty
-        elif max_drawdown_pct > 0.30:
-            # Penalità moderata tra 30-40%
-            drawdown_excess = max_drawdown_pct - 0.30
+        elif max_drawdown_pct > 0.20:
+            # Penalità moderata tra 20-30%
+            drawdown_excess = max_drawdown_pct - 0.20
             drawdown_penalty = drawdown_excess * total_profit * 2
         else:
             drawdown_penalty = 0
@@ -71,8 +77,15 @@ class ProfitDrawdownDurationHyperOptLoss(IHyperOptLoss):
             trade_duration, total_profit
         )
 
-        # Risultato: massimizza profit, penalizza drawdown >30% e duration >5h
-        result = -total_profit + drawdown_penalty + duration_penalty
+        # ============================================================================
+        # TRADE COUNT REWARD (incentiva configurazioni con più trade)
+        # ============================================================================
+        trade_count_reward = ProfitDrawdownDurationHyperOptLoss._calculate_trade_count_reward(
+            trade_count, total_profit
+        )
+
+        # Risultato: massimizza profit, penalizza drawdown >20% e duration >5h, premia più trade
+        result = -total_profit + drawdown_penalty + duration_penalty - trade_count_reward
 
         return result
 
@@ -104,3 +117,32 @@ class ProfitDrawdownDurationHyperOptLoss(IHyperOptLoss):
         penalty = penalty_percentage * abs(total_profit)
         
         return penalty
+
+    @staticmethod
+    def _calculate_trade_count_reward(trade_count: int, total_profit: float) -> float:
+        """
+        Calculate reward based on number of trades to incentivize scalping.
+        
+        Reward grows logarithmically with trade count:
+        - 100 trades → ~5% reward
+        - 300 trades → ~10% reward
+        - 500 trades → ~13% reward
+        - 1000 trades → ~17% reward
+        
+        Formula: log(1 + trade_count / 100) / 10 → percentage of profit
+        
+        :param trade_count: Number of trades
+        :param total_profit: Total profit to scale reward
+        :return: Trade count reward (absolute value)
+        """
+        if trade_count <= 0:
+            return 0
+        
+        # Reward logaritmico come percentuale del profit
+        # Formula: log(1 + count/100) / 10 → percentuale
+        # Es: 300 trade → log(4) / 10 = 0.139 = 13.9% del profit
+        #     500 trade → log(6) / 10 = 0.179 = 17.9% del profit
+        reward_percentage = math.log(1 + trade_count / 100) / 10
+        reward = reward_percentage * abs(total_profit)
+        
+        return reward
