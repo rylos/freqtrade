@@ -168,17 +168,133 @@ ml_dca_block_threshold = DecimalParameter(-0.05, -0.01, default=-0.02, space="bu
 freqtrade backtesting -c user_data/config_ml.json \
   --strategy RyLoSStrategyMLv3 \
   --freqaimodel RyLoSPyTorchModel \
-  --timerange 20241215-20260122
+  --timerange 20241215-20260128
 
-# Hyperopt
+# Hyperopt (debian - 30 cores)
 freqtrade hyperopt -c user_data/config_ml.json \
   --strategy RyLoSStrategyMLv3 \
   --freqaimodel RyLoSPyTorchModel \
-  --hyperopt-loss CalmarRyLoSHyperOptLoss \
-  --epochs 50 --spaces buy \
-  --timerange 20241215-20260122 \
-  --jobs 4
+  --hyperopt-loss ProfitDrawdownDurationHyperOptLoss \
+  --epochs 6000 --spaces buy sell \
+  --timerange 20241215-20260128 \
+  -j 30
 ```
+
+## Model Saving e Sync
+
+### CRITICO: save_backtest_models
+
+**Problema**: FreqAI PyTorch NON salva i modelli trainati durante il backtesting di default. Salva solo le predizioni (`.feather`) per velocizzare backtest successivi, ma i modelli vengono ritrainati ogni volta con seed casuali diversi → risultati inconsistenti.
+
+**Soluzione**: Aggiungi `"save_backtest_models": true` nel config FreqAI:
+
+```json
+{
+  "freqai": {
+    "enabled": true,
+    "model_save_type": "stable",
+    "save_backtest_models": true,  // ← OBBLIGATORIO per salvare modelli
+    "purge_old_models": 2,
+    "train_period_days": 3,
+    "backtest_period_days": 1,
+    "identifier": "rylos_mlv3_pytorch"
+  }
+}
+```
+
+### Workflow Training e Sync
+
+1. **Training iniziale** (scegli una delle due opzioni):
+
+**Opzione A - pc-casa** (più veloce, GPU disponibile):
+```bash
+ssh -p 22222 marco@home.ziliani.net
+cd /home/marco/dev/freqtrade
+source .venv/bin/activate
+
+# Cancella modelli vecchi
+rm -rf user_data/models/rylos_mlv3_pytorch
+
+# Backtest completo per trainare e salvare modelli
+freqtrade backtesting \
+  -c user_data/config_ml.json \
+  --strategy RyLoSStrategyMLv3 \
+  --freqaimodel RyLoSPyTorchModel \
+  --timerange 20241215-20260128
+```
+
+**Opzione B - pc-work** (locale, comodo per sviluppo):
+```bash
+cd /home/marco/dev/freqtrade
+source .venv/bin/activate
+
+# Cancella modelli vecchi
+rm -rf user_data/models/rylos_mlv3_pytorch
+
+# Backtest completo per trainare e salvare modelli
+freqtrade backtesting \
+  -c user_data/config_ml.json \
+  --strategy RyLoSStrategyMLv3 \
+  --freqaimodel RyLoSPyTorchModel \
+  --timerange 20241215-20260128
+```
+
+2. **Sync modelli** (se trainato su pc-casa):
+```bash
+# Da pc-casa a pc-work
+rsync -avz --progress -e "ssh -p 22222" \
+  marco@home.ziliani.net:/home/marco/dev/freqtrade/user_data/models/rylos_mlv3_pytorch/ \
+  user_data/models/rylos_mlv3_pytorch/
+```
+
+3. **Sync modelli a debian** (per hyperopt, da pc-work):
+```bash
+rsync -avz --progress \
+  user_data/models/rylos_mlv3_pytorch/ \
+  marco@192.168.0.34:/opt/freqtrade/user_data/models/rylos_mlv3_pytorch/
+```
+
+4. **Hyperopt su debian** (usa modelli già trainati):
+```bash
+ssh marco@192.168.0.34
+cd /opt/freqtrade
+source .venv/bin/activate
+
+freqtrade hyperopt \
+  -c user_data/config_ml.json \
+  --strategy RyLoSStrategyMLv3 \
+  --freqaimodel RyLoSPyTorchModel \
+  --hyperopt-loss ProfitDrawdownDurationHyperOptLoss \
+  --epochs 6000 --spaces buy sell \
+  --timerange 20241215-20260128 \
+  -j 30
+```
+
+### Struttura Modelli Salvati
+
+```
+user_data/models/rylos_mlv3_pytorch/
+├── run_params.json                    # Config FreqAI usato per training
+├── pair_dictionary.json               # Training queue e model locations
+├── backtesting_predictions/           # Predizioni salvate (*.feather)
+│   ├── cb_hype_1734220800_prediction.feather
+│   └── ...
+└── sub-train-HYPE_<timestamp>/        # Modello per ogni periodo
+    ├── cb_hype_<timestamp>_model.zip              # Pesi PyTorch
+    ├── cb_hype_<timestamp>_feature_pipeline.pkl   # Feature scaler
+    ├── cb_hype_<timestamp>_label_pipeline.pkl     # Label scaler
+    ├── cb_hype_<timestamp>_metadata.json          # Metadata modello
+    ├── cb_hype_<timestamp>_trained_df.pkl         # Training data
+    ├── cb_hype_<timestamp>_trained_dates_df.pkl   # Training dates
+    └── tensorboard/                               # TensorBoard logs
+```
+
+### Note Importanti
+
+1. **Modelli consistenti**: Con `save_backtest_models: true`, i modelli vengono salvati e riutilizzati → risultati identici tra backtest
+2. **Sync necessario**: Senza sync, ogni macchina ritraina con seed diversi → risultati diversi
+3. **Hyperopt veloce**: Con modelli già trainati, hyperopt ottimizza solo parametri strategia (non ritraina)
+4. **Disk space**: 409 modelli (~200MB) per periodo 2024-12-15 to 2026-01-28 (train_period_days=3, backtest_period_days=1)
 
 ## Note Importanti
 

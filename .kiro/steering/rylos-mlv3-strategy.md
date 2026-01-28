@@ -567,3 +567,116 @@ scp user_data/config_ml.json admin@amazon.ziliani.net:/opt/freqtrade/user_data/
 3. **Latenza**: Training richiede tempo (10-20 min per 10 giorni di dati)
 4. **Dipendenza dati**: Performance dipende dalla qualità dei dati di training
 5. **Black box**: Decisioni ML meno interpretabili rispetto a indicatori classici
+
+
+## Loss Function: ProfitDrawdownDurationHyperOptLoss
+
+### Formula
+
+```python
+result = -profit + drawdown_penalty + duration_penalty - trade_count_reward
+```
+
+### Componenti
+
+#### 1. Drawdown Penalty (esponenziale continua >20%)
+
+```python
+if max_drawdown > 20%:
+    excess = max_drawdown - 0.20
+    drawdown_penalty = (excess^1.5) * 4.47 * profit
+else:
+    drawdown_penalty = 0
+```
+
+**Calibrazione**:
+- 25% drawdown → ~5% penalty
+- 35% drawdown → ~26% penalty
+- 45% drawdown → ~56% penalty
+
+**Vantaggi**:
+- Crescita progressiva smooth (esponente 1.5)
+- Nessuna penalità sotto 20%
+- Penalità proporzionale al profit (scala automaticamente)
+
+#### 2. Duration Penalty (logaritmica >5h)
+
+```python
+if avg_duration <= 5h:
+    duration_penalty = 0
+else:
+    hours_over = (avg_duration - 5h) / 60
+    penalty_pct = log(1 + hours_over) / 10
+    duration_penalty = penalty_pct * profit
+```
+
+**Esempi**:
+- 5h → 0% penalty
+- 10h → ~18% penalty
+- 24h → ~30% penalty
+
+**Vantaggi**:
+- Incentiva trade veloci (scalping)
+- Crescita logaritmica (non esplosiva)
+- Penalità proporzionale al profit
+
+#### 3. Trade Count Reward (incentiva scalping)
+
+```python
+if trade_count <= 300:
+    reward_pct = log(1 + trade_count / 100) / 10
+else:
+    base = log(1 + 300 / 100) / 10
+    excess = min(trade_count, 800) - 300
+    reward_pct = base + (excess / 100) * 0.05
+
+trade_count_reward = reward_pct * profit
+```
+
+**Esempi**:
+- 100 trades → ~7% reward
+- 300 trades → ~14% reward
+- 500 trades → ~24% reward
+- 800 trades → ~39% reward (CAP)
+
+**Vantaggi**:
+- Incentiva configurazioni con più trade
+- Crescita logaritmica fino a 300, poi lineare
+- Cap a 800 trade per evitare overtrading
+
+### Obiettivo
+
+Massimizzare profit totale bilanciando:
+1. **Drawdown contenuto** (<20% ideale, penalità progressiva oltre)
+2. **Trade veloci** (<5h ideale, penalità logaritmica oltre)
+3. **Scalping attivo** (più trade = meglio, fino a 800)
+
+### Confronto con altre Loss Functions
+
+| Loss Function | Focus | Drawdown | Duration | Trade Count |
+|---------------|-------|----------|----------|-------------|
+| **ProfitDrawdownDurationHyperOptLoss** | Profit + Scalping | Esponenziale >20% | Logaritmica >5h | Reward (cap 800) |
+| CalmarRyLoSHyperOptLoss | Calmar Ratio | Lineare | Logaritmica >2h | No reward |
+| ProfitDrawdownTolerantHyperOptLoss | Profit + Tolleranza | Progressiva >20% | No penalty | No reward |
+| OnlyProfitHyperOptLoss | Solo Profit | No penalty | No penalty | No reward |
+
+### Quando usare
+
+- ✅ **Scalping strategy** (target: molti trade veloci)
+- ✅ **Drawdown tolerance** (accetta fino a 20% senza penalità)
+- ✅ **Duration optimization** (preferisce trade <5h)
+- ❌ **Long-term holding** (penalizza trade lunghi)
+- ❌ **Low frequency** (penalizza pochi trade)
+
+### Hyperopt Command
+
+```bash
+freqtrade hyperopt \
+  -c user_data/config_ml.json \
+  --strategy RyLoSStrategyMLv3 \
+  --freqaimodel RyLoSPyTorchModel \
+  --hyperopt-loss ProfitDrawdownDurationHyperOptLoss \
+  --epochs 6000 --spaces buy sell \
+  --timerange 20241215-20260128 \
+  -j 30
+```

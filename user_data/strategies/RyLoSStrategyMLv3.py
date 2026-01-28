@@ -1,12 +1,9 @@
-from datetime import UTC, timedelta
-
 import pandas as pd
 import talib.abstract as ta
 from pandas import DataFrame
 
 from freqtrade.strategy import (
     DecimalParameter,
-    IntParameter,
     IStrategy,
     Trade,
     timeframe_to_minutes,
@@ -25,8 +22,8 @@ class RyLoSStrategyMLv3(IStrategy):
     # Prevents catastrophic losses like -68% seen in backtest
     stoploss = -0.10
     
-    # Max trade duration: force exit after 2 days (576 candles @ 5m)
-    max_trade_duration_candles = 576  # 2 giorni
+    # Max trade duration: DISABLED (let ML handle exits)
+    # max_trade_duration_candles = 576  # 2 giorni (DISABLED)
 
     # ROI disabilitato - usa solo custom_exit ML-driven
     minimal_roi = {
@@ -81,12 +78,6 @@ class RyLoSStrategyMLv3(IStrategy):
     dca_atr_multiplier = DecimalParameter(
         0.5, 3.0, default=1.766, space="buy", optimize=True,
         load=True, decimals=3
-    )
-
-    # DCA cooldown dinamico (numero di candele da aspettare)
-    dca_cooldown_candles = IntParameter(
-        1, 5, default=2, space="buy", optimize=False,
-        load=True
     )
 
     # ============================================================================
@@ -616,14 +607,8 @@ class RyLoSStrategyMLv3(IStrategy):
         if trade.has_open_orders:
             return None
 
-        # Punto 2: Cooldown dinamico: aspetta N candele dall'ultimo DCA
-        filled_entries = trade.select_filled_orders(trade.entry_side)
-        if len(filled_entries) > 0:
-            last_order_time = filled_entries[-1].order_filled_date.replace(tzinfo=UTC)
-            cooldown_minutes = timeframe_to_minutes(self.timeframe) * self.dca_cooldown_candles.value
-            min_wait_time = timedelta(minutes=cooldown_minutes)
-            if (current_time - min_wait_time) < last_order_time:
-                return None
+        # Punto 2: REMOVED - No cooldown, allow immediate DCA if conditions met
+        # This allows faster DCA response to price drops
 
         total_balance = self.wallets.get_total_stake_amount()
         max_open_trades = self.config.get("max_open_trades", 1)
@@ -637,6 +622,7 @@ class RyLoSStrategyMLv3(IStrategy):
         current_global_exposure = self.get_total_position_value()
 
         # Usa solo ordini fillati per calcolare distanze
+        filled_entries = trade.select_filled_orders(trade.entry_side)
         if not filled_entries:
             return None
 
@@ -977,19 +963,7 @@ class RyLoSStrategyMLv3(IStrategy):
         """
         from freqtrade.loggers import logger
 
-        # Calculate trade duration
-        trade_duration_candles = (current_time - trade.open_date_utc).total_seconds() / (timeframe_to_minutes(self.timeframe) * 60)
-
-        # PRIORITY 1: Force exit after 2 days (avoid infinite trades)
-        if trade_duration_candles > self.max_trade_duration_candles:
-            logger.warning(
-                f"{pair}: MAX TRADE DURATION exceeded - "
-                f"duration={trade_duration_candles:.0f} candles (max={self.max_trade_duration_candles}) - "
-                f"Force exit at {current_profit*100:+.2f}%"
-            )
-            return f"force_exit_duration_{current_profit*100:+.1f}%"
-
-        # PRIORITY 2: ML exit if we have minimum profit
+        # PRIORITY 1: ML exit if we have minimum profit
         if current_profit > self.min_profit_for_ml_exit.value:
             # Get ML predictions
             pred_5m, pred_15m, pred_30m = self.get_ml_predictions(pair)
