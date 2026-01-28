@@ -41,11 +41,11 @@ class RyLoSStrategyMLv3(IStrategy):
     # Strong positive predictions → tight distance (aggressive DCA)
     # Weak/negative predictions → wide distance (conservative DCA)
     ml_dca_distance_tight = DecimalParameter(
-        0.015, 0.025, default=0.0245, space="buy", optimize=True,
+        0.015, 0.025, default=0.0181, space="buy", optimize=True,
         load=True, decimals=4
     )
     ml_dca_distance_wide = DecimalParameter(
-        0.035, 0.055, default=0.0422, space="buy", optimize=True,
+        0.035, 0.055, default=0.0364, space="buy", optimize=True,
         load=True, decimals=4
     )
 
@@ -53,11 +53,11 @@ class RyLoSStrategyMLv3(IStrategy):
     # Strong positive → tight distance
     # Weak/negative → wide distance
     ml_dca_pred_min = DecimalParameter(
-        -0.02, 0.0, default=-0.003, space="buy", optimize=True,
+        -0.02, 0.0, default=-0.019, space="buy", optimize=True,
         load=True, decimals=4
     )
     ml_dca_pred_max = DecimalParameter(
-        0.01, 0.04, default=0.0117, space="buy", optimize=True,
+        0.01, 0.04, default=0.0145, space="buy", optimize=True,
         load=True, decimals=4
     )
 
@@ -66,17 +66,17 @@ class RyLoSStrategyMLv3(IStrategy):
     # ============================================================================
 
     first_order_pct = DecimalParameter(
-        0.005, 0.03, default=0.017, space="buy", optimize=True,
+        0.005, 0.03, default=0.0175, space="buy", optimize=True,
         load=True, decimals=4
     )
     dca_multiplier = DecimalParameter(
-        1.5, 3.0, default=2.656, space="buy", optimize=True,
+        1.5, 3.0, default=2.736, space="buy", optimize=True,
         load=True, decimals=3
     )
 
     # DCA dinamico basato su volatilità ATR
     dca_atr_multiplier = DecimalParameter(
-        0.5, 3.0, default=1.766, space="buy", optimize=True,
+        0.5, 3.0, default=0.505, space="buy", optimize=True,
         load=True, decimals=3
     )
 
@@ -86,13 +86,13 @@ class RyLoSStrategyMLv3(IStrategy):
 
     # ML exit: focus on 5m prediction for fast scalping
     ml_exit_threshold = DecimalParameter(
-        -0.01, 0.01, default=-0.001, space="sell", optimize=True,
+        -0.01, 0.01, default=0.0061, space="sell", optimize=True,
         load=True, decimals=4
     )
 
     # Minimum profit required for ML exit (prevent premature exit)
     min_profit_for_ml_exit = DecimalParameter(
-        0.005, 0.03, default=0.01, space="sell", optimize=True,
+        0.005, 0.03, default=0.0245, space="sell", optimize=True,
         load=True, decimals=4
     )
 
@@ -109,33 +109,33 @@ class RyLoSStrategyMLv3(IStrategy):
     # Weighted prediction thresholds (single threshold per action)
     # EXPANDED RANGES for scalping: allow more aggressive entry/exit
     ml_entry_threshold = DecimalParameter(
-        -0.01, 0.01, default=0.0012, space="buy", optimize=True,
+        -0.01, 0.01, default=-0.0096, space="buy", optimize=True,
         load=True, decimals=4
     )
     
     # NEW: Minimum 5m prediction for entry (prevent entry with negative 5m)
     ml_entry_5m_min = DecimalParameter(
-        -0.005, 0.005, default=-0.001, space="buy", optimize=True,
+        -0.005, 0.005, default=-0.0048, space="buy", optimize=True,
         load=True, decimals=4
     )
     
     ml_dca_threshold = DecimalParameter(
-        -0.02, 0.02, default=-0.0099, space="buy", optimize=True,
+        -0.02, 0.02, default=-0.0192, space="buy", optimize=True,
         load=True, decimals=4
     )
 
     # Weights for each time horizon (normalized internally)
     # EXPANDED RANGE: allow 5m to dominate for scalping (up to 3.0)
     ml_weight_5m = DecimalParameter(
-        0.1, 3.0, default=0.81, space="buy", optimize=True,
+        0.1, 3.0, default=2.21, space="buy", optimize=True,
         load=True, decimals=2
     )
     ml_weight_15m = DecimalParameter(
-        0.1, 3.0, default=2.17, space="buy", optimize=True,
+        0.1, 3.0, default=0.69, space="buy", optimize=True,
         load=True, decimals=2
     )
     ml_weight_30m = DecimalParameter(
-        0.1, 3.0, default=2.6, space="buy", optimize=True,
+        0.1, 3.0, default=2.08, space="buy", optimize=True,
         load=True, decimals=2
     )
 
@@ -145,7 +145,7 @@ class RyLoSStrategyMLv3(IStrategy):
 
     # Crash detection: drop % in 15 minutes (3 candles @ 5m) to trigger immediate exit
     crash_detection_threshold = DecimalParameter(
-        -0.10, -0.03, default=-0.06, space="sell", optimize=True,
+        -0.10, -0.03, default=-0.065, space="sell", optimize=True,
         load=True, decimals=3
     )
 
@@ -155,11 +155,11 @@ class RyLoSStrategyMLv3(IStrategy):
 
     # ML drawdown prediction: exit if predicted drawdown exceeds threshold
     ml_drawdown_1h_threshold = DecimalParameter(
-        -0.15, -0.05, default=-0.10, space="sell", optimize=True,
+        -0.15, -0.05, default=-0.138, space="sell", optimize=True,
         load=True, decimals=3
     )
     ml_drawdown_2h_threshold = DecimalParameter(
-        -0.20, -0.08, default=-0.15, space="sell", optimize=True,
+        -0.20, -0.08, default=-0.117, space="sell", optimize=True,
         load=True, decimals=3
     )
 
@@ -180,11 +180,11 @@ class RyLoSStrategyMLv3(IStrategy):
 
     # Prediction range for confidence mapping
     ml_confidence_min = DecimalParameter(
-        -0.02, 0.0, default=-0.0065, space="buy", optimize=True,
+        -0.02, 0.0, default=-0.0113, space="buy", optimize=True,
         load=True, decimals=4
     )
     ml_confidence_max = DecimalParameter(
-        0.01, 0.05, default=0.0417, space="buy", optimize=True,
+        0.01, 0.05, default=0.0103, space="buy", optimize=True,
         load=True, decimals=4
     )
 
