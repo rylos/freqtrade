@@ -764,15 +764,15 @@ class RyLoSStrategyMLv3(IStrategy):
                 # Check ML exit
                 if current_profit > self.min_profit_for_ml_exit.value and pred_5m < self.ml_exit_threshold.value:
                     status = "❌ SELL"
-                    reason = f"5m<{self.ml_exit_threshold.value:.4f} | profit={current_profit*100:+.1f}%"
+                    reason = f"5m={pred_5m*100:+.2f}%<{self.ml_exit_threshold.value*100:+.2f}% | profit={current_profit*100:+.1f}%"
                 # Check drawdown prediction
                 elif pred_dd_1h < self.ml_drawdown_1h_threshold.value or pred_dd_2h < self.ml_drawdown_2h_threshold.value:
                     status = "⚠️ DD ALERT"
-                    reason = f"DD 1h/2h < {self.ml_drawdown_1h_threshold.value:.2f}/{self.ml_drawdown_2h_threshold.value:.2f}"
+                    reason = f"DD 1h/2h < {self.ml_drawdown_1h_threshold.value*100:+.1f}%/{self.ml_drawdown_2h_threshold.value*100:+.1f}%"
                 # Check DCA
                 elif weighted < self.ml_dca_threshold.value:
                     status = "🚫 DCA BLOCKED"
-                    reason = f"w<{self.ml_dca_threshold.value:.4f}"
+                    reason = f"w={weighted*100:+.2f}%<{self.ml_dca_threshold.value*100:+.2f}%"
                 else:
                     status = "⏸️ HOLD"
                     reason = f"profit={current_profit*100:+.1f}%"
@@ -780,13 +780,13 @@ class RyLoSStrategyMLv3(IStrategy):
                 # Not in trade - check entry conditions
                 if weighted > self.ml_entry_threshold.value and pred_5m > self.ml_entry_5m_min.value:
                     status = "✅ BUY"
-                    reason = f"w>{self.ml_entry_threshold.value:.4f}, 5m>{self.ml_entry_5m_min.value:.4f}"
+                    reason = f"w={weighted*100:+.2f}%>{self.ml_entry_threshold.value*100:+.2f}%, 5m={pred_5m*100:+.2f}%>{self.ml_entry_5m_min.value*100:+.2f}%"
                 elif weighted <= self.ml_entry_threshold.value:
                     status = "⏸️ NEUTRAL"
-                    reason = f"w<{self.ml_entry_threshold.value:.4f}"
+                    reason = f"w={weighted*100:+.2f}%<{self.ml_entry_threshold.value*100:+.2f}%"
                 else:
                     status = "⏸️ NEUTRAL"
-                    reason = f"5m<{self.ml_entry_5m_min.value:.4f}"
+                    reason = f"5m={pred_5m*100:+.2f}%<{self.ml_entry_5m_min.value*100:+.2f}%"
 
             from freqtrade.loggers import logger
             logger.info(
