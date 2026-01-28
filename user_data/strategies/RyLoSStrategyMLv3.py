@@ -790,7 +790,7 @@ class RyLoSStrategyMLv3(IStrategy):
 
             from freqtrade.loggers import logger
             logger.info(
-                f"{metadata['pair']}: ML → "
+                f"{metadata['pair']}: 🤖 ML → "
                 f"5m={pred_5m*100:+.2f}%, 15m={pred_15m*100:+.2f}%, 30m={pred_30m*100:+.2f}% | "
                 f"w={weighted*100:+.2f}% | "
                 f"DD: 1h={pred_dd_1h*100:+.1f}%, 2h={pred_dd_2h*100:+.1f}% | "
