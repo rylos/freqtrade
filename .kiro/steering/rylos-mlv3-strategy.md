@@ -35,7 +35,7 @@ weighted_pred = (
 ) / (ml_weight_5m + ml_weight_15m + ml_weight_30m)
 ```
 
-## Parametri Ottimizzabili (20 totali)
+## Parametri Ottimizzabili (21 totali)
 
 ### ML Weights (3 parametri - buy space)
 
@@ -47,10 +47,11 @@ ml_weight_30m = 0.1 to 3.0  (default: 1.95)   # Peso orizzonte 30m
 
 **Range espanso a 3.0**: permette al 5m di dominare per scalping rapido
 
-### ML Thresholds (2 parametri - buy space)
+### ML Thresholds (3 parametri - buy space)
 
 ```text
 ml_entry_threshold = -0.01 to 0.01  (default: 0.0049)  # Entry quando weighted_pred > threshold
+ml_entry_5m_min    = -0.005 to 0.005 (default: -0.001) # NEW: Minimo 5m per entry (previene entry con 5m negativo)
 ml_dca_threshold   = -0.02 to 0.02  (default: 0.0021)  # DCA quando weighted_pred > threshold
 ```
 

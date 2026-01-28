@@ -20,7 +20,13 @@ class RyLoSStrategyMLv3(IStrategy):
     position_adjustment_enable = True
     startup_candle_count: int = 50  # Massimo periodo indicatori (per FreqAI)
     # max_entry_position_adjustment rimosso - calcolato dinamicamente
-    stoploss = -0.22  # Fallback stoploss (overridden by ML-driven logic in custom_stoploss)
+    
+    # Stoploss: -10% position = -40% capital (with 4x leverage)
+    # Prevents catastrophic losses like -68% seen in backtest
+    stoploss = -0.10
+    
+    # Max trade duration: force exit after 2 days (576 candles @ 5m)
+    max_trade_duration_candles = 576  # 2 giorni
 
     # ROI disabilitato - usa solo custom_exit ML-driven
     minimal_roi = {
@@ -115,6 +121,13 @@ class RyLoSStrategyMLv3(IStrategy):
         -0.01, 0.01, default=0.0012, space="buy", optimize=True,
         load=True, decimals=4
     )
+    
+    # NEW: Minimum 5m prediction for entry (prevent entry with negative 5m)
+    ml_entry_5m_min = DecimalParameter(
+        -0.005, 0.005, default=-0.001, space="buy", optimize=True,
+        load=True, decimals=4
+    )
+    
     ml_dca_threshold = DecimalParameter(
         -0.02, 0.02, default=-0.0099, space="buy", optimize=True,
         load=True, decimals=4
@@ -163,8 +176,9 @@ class RyLoSStrategyMLv3(IStrategy):
     # FIXED STOPLOSS (fallback)
     # ============================================================================
 
-    # Fixed stoploss as fallback if no other level triggers
-    fixed_stoploss = -0.20  # -20% fixed stoploss
+    # Fixed stoploss: -10% position = -40% capital (4x leverage)
+    # Prevents catastrophic losses while allowing recovery
+    fixed_stoploss = -0.10
 
     # ============================================================================
     # ML CONFIDENCE-BASED STAKE SIZING (Optional - 2 optimizable)
@@ -598,11 +612,11 @@ class RyLoSStrategyMLv3(IStrategy):
         current_exit_profit: float,
         **kwargs,
     ) -> float | tuple[float, str] | None:
-        # Punto 4: Non agire se ci sono ordini aperti
+        # Punto 1: Non agire se ci sono ordini aperti
         if trade.has_open_orders:
             return None
 
-        # Cooldown dinamico: aspetta N candele dall'ultimo DCA
+        # Punto 2: Cooldown dinamico: aspetta N candele dall'ultimo DCA
         filled_entries = trade.select_filled_orders(trade.entry_side)
         if len(filled_entries) > 0:
             last_order_time = filled_entries[-1].order_filled_date.replace(tzinfo=UTC)
@@ -715,6 +729,74 @@ class RyLoSStrategyMLv3(IStrategy):
         # ATR for dynamic DCA distance calculation
         dataframe["atr"] = ta.ATR(dataframe, timeperiod=10)
 
+        # Log ML prediction values after FreqAI generates them
+        if len(dataframe) > 0 and "&-s_close_5m" in dataframe.columns:
+            last_candle = dataframe.iloc[-1]
+            pred_5m = last_candle.get("&-s_close_5m", 0.0)
+            pred_15m = last_candle.get("&-s_close_15m", 0.0)
+            pred_30m = last_candle.get("&-s_close_30m", 0.0)
+            pred_dd_1h = last_candle.get("&-s_max_drawdown_1h", 0.0)
+            pred_dd_2h = last_candle.get("&-s_max_drawdown_2h", 0.0)
+
+            # Calculate weighted prediction
+            w_5m = self.ml_weight_5m.value
+            w_15m = self.ml_weight_15m.value
+            w_30m = self.ml_weight_30m.value
+            total_weight = w_5m + w_15m + w_30m
+            weighted = (pred_5m * w_5m + pred_15m * w_15m + pred_30m * w_30m) / total_weight
+
+            # Determine status and reason
+            status = ""
+            reason = ""
+
+            # Check if we're in a trade
+            open_trades = Trade.get_open_trades()
+            current_trade = None
+            for t in open_trades:
+                if t.pair == metadata['pair']:
+                    current_trade = t
+                    break
+
+            if current_trade:
+                # In trade - check exit conditions
+                current_profit = current_trade.calc_profit_ratio(last_candle['close'])
+
+                # Check ML exit
+                if current_profit > self.min_profit_for_ml_exit.value and pred_5m < self.ml_exit_threshold.value:
+                    status = "❌ SELL"
+                    reason = f"5m<{self.ml_exit_threshold.value:.4f} | profit={current_profit*100:+.1f}%"
+                # Check drawdown prediction
+                elif pred_dd_1h < self.ml_drawdown_1h_threshold.value or pred_dd_2h < self.ml_drawdown_2h_threshold.value:
+                    status = "⚠️ DD ALERT"
+                    reason = f"DD 1h/2h < {self.ml_drawdown_1h_threshold.value:.2f}/{self.ml_drawdown_2h_threshold.value:.2f}"
+                # Check DCA
+                elif weighted < self.ml_dca_threshold.value:
+                    status = "🚫 DCA BLOCKED"
+                    reason = f"w<{self.ml_dca_threshold.value:.4f}"
+                else:
+                    status = "⏸️ HOLD"
+                    reason = f"profit={current_profit*100:+.1f}%"
+            else:
+                # Not in trade - check entry conditions
+                if weighted > self.ml_entry_threshold.value and pred_5m > self.ml_entry_5m_min.value:
+                    status = "✅ BUY"
+                    reason = f"w>{self.ml_entry_threshold.value:.4f}, 5m>{self.ml_entry_5m_min.value:.4f}"
+                elif weighted <= self.ml_entry_threshold.value:
+                    status = "⏸️ NEUTRAL"
+                    reason = f"w<{self.ml_entry_threshold.value:.4f}"
+                else:
+                    status = "⏸️ NEUTRAL"
+                    reason = f"5m<{self.ml_entry_5m_min.value:.4f}"
+
+            from freqtrade.loggers import logger
+            logger.info(
+                f"{metadata['pair']}: ML → "
+                f"5m={pred_5m*100:+.2f}%, 15m={pred_15m*100:+.2f}%, 30m={pred_30m*100:+.2f}% | "
+                f"w={weighted*100:+.2f}% | "
+                f"DD: 1h={pred_dd_1h*100:+.1f}%, 2h={pred_dd_2h*100:+.1f}% | "
+                f"{status} ({reason})"
+            )
+
         return dataframe
 
     def populate_entry_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
@@ -743,8 +825,11 @@ class RyLoSStrategyMLv3(IStrategy):
             dataframe["&-s_close_30m"] * w_30m
         ) / total_weight
 
-        # Entry condition: weighted prediction above threshold
-        entry_condition = dataframe["weighted_pred"] > self.ml_entry_threshold.value
+        # Entry condition: weighted prediction above threshold AND 5m not too negative
+        entry_condition = (
+            (dataframe["weighted_pred"] > self.ml_entry_threshold.value) &
+            (dataframe["&-s_close_5m"] > self.ml_entry_5m_min.value)
+        )
 
         # Set entry signal
         dataframe.loc[entry_condition, "enter_long"] = 1
@@ -887,12 +972,24 @@ class RyLoSStrategyMLv3(IStrategy):
         ML-driven exit with focus on 5m prediction for fast scalping.
 
         Exit when:
-        - Profit > min_profit_for_ml_exit AND
-        - 5m prediction < ml_exit_threshold (focus on immediate future)
+        - Trade duration > 2 days (force exit to avoid infinite trades)
+        - Profit > min_profit_for_ml_exit AND 5m prediction < ml_exit_threshold
         """
         from freqtrade.loggers import logger
 
-        # Only check ML exit if we have minimum profit
+        # Calculate trade duration
+        trade_duration_candles = (current_time - trade.open_date_utc).total_seconds() / (timeframe_to_minutes(self.timeframe) * 60)
+
+        # PRIORITY 1: Force exit after 2 days (avoid infinite trades)
+        if trade_duration_candles > self.max_trade_duration_candles:
+            logger.warning(
+                f"{pair}: MAX TRADE DURATION exceeded - "
+                f"duration={trade_duration_candles:.0f} candles (max={self.max_trade_duration_candles}) - "
+                f"Force exit at {current_profit*100:+.2f}%"
+            )
+            return f"force_exit_duration_{current_profit*100:+.1f}%"
+
+        # PRIORITY 2: ML exit if we have minimum profit
         if current_profit > self.min_profit_for_ml_exit.value:
             # Get ML predictions
             pred_5m, pred_15m, pred_30m = self.get_ml_predictions(pair)

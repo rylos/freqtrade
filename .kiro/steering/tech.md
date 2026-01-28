@@ -1,5 +1,32 @@
 # Technology Stack
 
+## Documentation
+
+- **Freqtrade Official Docs**: https://www.freqtrade.io/en/develop/
+  - Always use the `/develop/` version for latest features and API reference
+  - Examples: strategy development, configuration, backtesting, hyperopt, FreqAI
+
+## Stoploss with Leverage (Important!)
+
+From official docs: https://www.freqtrade.io/en/develop/stoploss/#stoploss-and-leverage
+
+**Key Concept**: Stoploss defines the **risk on the trade** (amount you are willing to lose from your capital), NOT the price movement percentage.
+
+**Formula**: `price_move_trigger = stoploss / leverage`
+
+**Examples**:
+- `stoploss = -0.10` with 4x leverage → triggers on **-2.5%** price move (10% / 4)
+- `stoploss = -0.10` with 10x leverage → triggers on **-1%** price move (10% / 10)
+- `stoploss = -0.20` with 4x leverage → triggers on **-5%** price move (20% / 4)
+
+**Why**: With leverage, a small price move results in a large capital change.
+- 4x leverage: 1% price move = 4% capital change
+- 10x leverage: 1% price move = 10% capital change
+
+**Best Practice**: With higher leverage, use wider stoploss values to allow trades to "breathe".
+- 10x leverage with 10% stoploss = only 1% price move tolerance (very tight!)
+- 4x leverage with 10% stoploss = 2.5% price move tolerance (reasonable)
+
 ## Language & Runtime
 
 - **Python**: 3.11+ (supports 3.11, 3.12, 3.13, 3.14)
