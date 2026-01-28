@@ -16,34 +16,31 @@
     "max_open_trades": {
       "max_open_trades": 1
     },
+    "sell": {
+      "crash_detection_threshold": -0.06,
+      "min_profit_for_ml_exit": 0.01,
+      "ml_drawdown_1h_threshold": -0.1,
+      "ml_drawdown_2h_threshold": -0.15,
+      "ml_exit_threshold": -0.001
+    },
     "buy": {
       "dca_cooldown_candles": 2,
-      "dca_atr_multiplier": 0.629,
-      "dca_multiplier": 2.45,
-      "first_order_pct": 0.0141,
-      "ml_confidence_max": 0.0308,
-      "ml_confidence_min": -0.0036,
-      "ml_dca_distance_tight": 0.0167,
-      "ml_dca_distance_wide": 0.0383,
-      "ml_dca_pred_max": 0.0183,
-      "ml_dca_pred_min": -0.0144,
-      "ml_dca_threshold_15m": -0.0272,
-      "ml_dca_threshold_30m": -0.0153,
-      "ml_dca_threshold_5m": -0.0188,
-      "ml_entry_threshold_15m": 0.0098,
-      "ml_entry_threshold_30m": -0.0065,
-      "ml_entry_threshold_5m": 0.0179
-    },
-    "sell": {
-      "min_profit_for_overbought_exit": 0.0951,
-      "ml_exit_threshold_5m": -0.016,
-      "ml_stoploss_activation_loss": -0.12,
-      "ml_stoploss_loose": -0.219,
-      "ml_stoploss_pred_max": -0.0066,
-      "ml_stoploss_pred_min": -0.0918,
-      "ml_stoploss_tight": -0.112
+      "dca_atr_multiplier": 1.766,
+      "dca_multiplier": 2.656,
+      "first_order_pct": 0.017,
+      "ml_confidence_max": 0.0417,
+      "ml_confidence_min": -0.0065,
+      "ml_dca_distance_tight": 0.0245,
+      "ml_dca_distance_wide": 0.0422,
+      "ml_dca_pred_max": 0.0117,
+      "ml_dca_pred_min": -0.003,
+      "ml_dca_threshold": -0.0099,
+      "ml_entry_threshold": 0.0012,
+      "ml_weight_15m": 2.17,
+      "ml_weight_30m": 2.6,
+      "ml_weight_5m": 0.81
     }
   },
   "ft_stratparam_v": 1,
-  "export_time": "2026-01-25 22:14:23.963485+00:00"
+  "export_time": "2026-01-27 07:25:45.922467+00:00"
 }
