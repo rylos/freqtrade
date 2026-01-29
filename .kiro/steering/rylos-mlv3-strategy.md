@@ -10,7 +10,7 @@ Strategia ML-driven con predizioni pesate su 3 orizzonti temporali (5m, 15m, 30m
 timeframe = "5m"
 can_short = False
 leverage = 4.0
-stoploss = -0.22  # Fallback (overridden by custom_stoploss)
+stoploss = -0.20  # -20% position = -80% capital (4x leverage)
 minimal_roi = {"0": 0.5}  # DISABILITATO
 trailing_stop = False  # DISABILITATO
 ```
@@ -35,19 +35,23 @@ weighted_pred = (
 ) / (ml_weight_5m + ml_weight_15m + ml_weight_30m)
 ```
 
-## Parametri Ottimizzabili (21 totali)
+## Parametri Ottimizzati (Hyperopt 2026-01-29)
 
 ### ML Weights (3 parametri - buy space)
 
 ```text
-ml_weight_5m  = 0.1 to 3.0  (default: 0.23)   # Peso orizzonte 5m
-ml_weight_15m = 0.1 to 3.0  (default: 0.45)   # Peso orizzonte 15m
-ml_weight_30m = 0.1 to 3.0  (default: 1.95)   # Peso orizzonte 30m
+ml_weight_5m  = 2.90   # Peso orizzonte 5m (dominanza scalping)
+ml_weight_15m = 1.58   # Peso orizzonte 15m
+ml_weight_30m = 1.93   # Peso orizzonte 30m
 ```
 
-**Range espanso a 3.0**: permette al 5m di dominare per scalping rapido
+### ML Thresholds (7 parametri - buy space)
 
-### ML Thresholds (3 parametri - buy space)
+```text
+ml_entry_threshold = -0.0061   # Entry quando weighted_pred > threshold
+ml_entry_5m_min    = -0.005    # Minimo 5m per entry
+ml_dca_threshold   = -0.0184   # DCA quando weighted_pred > threshold
+```
 
 ```text
 ml_entry_threshold = -0.01 to 0.01  (default: 0.0049)  # Entry quando weighted_pred > threshold
@@ -58,57 +62,53 @@ ml_dca_threshold   = -0.02 to 0.02  (default: 0.0021)  # DCA quando weighted_pre
 ### DCA Core (3 parametri - buy space)
 
 ```text
-first_order_pct    = 0.005 to 0.03  (default: 0.0134)  # % balance primo ordine
-dca_multiplier     = 1.5 to 3.0     (default: 2.919)   # Moltiplicatore stake progressivo
-dca_atr_multiplier = 0.5 to 3.0     (default: 0.642)   # Peso ATR su distanza DCA
+first_order_pct    = 0.0214   # 2.14% balance primo ordine
+dca_multiplier     = 2.665    # Moltiplicatore stake progressivo
+dca_atr_multiplier = 1.587    # Peso ATR su distanza DCA (molto influente)
 ```
 
 ### ML Dynamic DCA Distance (4 parametri - buy space)
 
 ```text
-ml_dca_distance_tight = 0.015 to 0.025  (default: 0.0199)  # Distanza stretta (pred positivo)
-ml_dca_distance_wide  = 0.035 to 0.055  (default: 0.0478)  # Distanza ampia (pred negativo)
-ml_dca_pred_min       = -0.02 to 0.0    (default: -0.0128) # Pred min per mapping
-ml_dca_pred_max       = 0.01 to 0.04    (default: 0.0256)  # Pred max per mapping
+ml_dca_distance_tight = 0.0219   # Distanza stretta (pred positivo)
+ml_dca_distance_wide  = 0.0353   # Distanza ampia (pred negativo)
+ml_dca_pred_min       = -0.0179  # Pred min per mapping
+ml_dca_pred_max       = 0.0164   # Pred max per mapping
 ```
-
-**Logica**: Predizioni positive → distanza stretta (DCA aggressivo), predizioni negative → distanza ampia (DCA conservativo)
 
 ### ML Exit (2 parametri - sell space)
 
 ```text
-ml_exit_threshold      = -0.01 to 0.01  (default: -0.001)  # Exit quando pred_5m < threshold
-min_profit_for_ml_exit = 0.005 to 0.03 (default: 0.01)    # Profit minimo per ML exit
+ml_exit_threshold      = 0.0034   # Exit quando pred_5m < threshold
+min_profit_for_ml_exit = 0.0229   # Profit minimo per ML exit (2.29%)
 ```
-
-**FOCUS 5M**: Exit basato SOLO su predizione 5m (non weighted), per reazione veloce
 
 ### Crash Detection (1 parametro - sell space)
 
-```python
-crash_detection_threshold = -0.10 to -0.03  (default: -0.06)  # Drop % in 15min per exit immediato
+```text
+crash_detection_threshold = -0.045  # Drop % in 15min per exit immediato (-4.5%)
 ```
 
 ### ML Drawdown Prediction (2 parametri - sell space)
 
 ```text
-ml_drawdown_1h_threshold = -0.15 to -0.05  (default: -0.10)  # Exit preventivo se pred_dd_1h < threshold
-ml_drawdown_2h_threshold = -0.20 to -0.08  (default: -0.15)  # Exit preventivo se pred_dd_2h < threshold
+ml_drawdown_1h_threshold = -0.052   # Exit preventivo se pred_dd_1h < -5.2%
+ml_drawdown_2h_threshold = -0.142   # Exit preventivo se pred_dd_2h < -14.2%
 ```
 
 ### ML Confidence Stake Sizing (2 parametri - buy space - OPZIONALE)
 
 ```text
-ml_stake_confidence_enabled = False  # Set to True per abilitare
-ml_confidence_min = -0.02 to 0.0   (default: -0.0192)  # Pred min → stake 0.5x
-ml_confidence_max = 0.01 to 0.05   (default: 0.0275)   # Pred max → stake 1.5x
+ml_stake_confidence_enabled = False  # Disabilitato
+ml_confidence_min = -0.0157
+ml_confidence_max = 0.05
 ```
 
 ### Fixed Parameters
 
 ```python
-dca_cooldown_candles = 2  # FISSO - 10 minuti (2 × 5m)
-fixed_stoploss = -0.20    # Fallback stoploss
+dca_cooldown_candles = 1  # 1 candela = 5 minuti (ATTIVO)
+fixed_stoploss = -0.20    # -20% position = -80% capital
 ```
 
 ## Logica Entry
@@ -419,6 +419,31 @@ dca_cooldown_candles = 2  # FISSO - 10 minuti (2 × 5m)
   }
 }
 ```
+
+## Model Ready Check (`do_predict`)
+
+La strategia usa il flag ufficiale FreqAI `do_predict` per verificare se le predizioni sono affidabili:
+
+```python
+if dataframe["do_predict"].iloc[-1] == 0:
+    logger.debug(f"{pair}: ML skipped - model not ready (do_predict=0)")
+    return None
+```
+
+### Quando `do_predict = 0`:
+1. **Modello non caricato**: Durante startup o training
+2. **DI > threshold**: Predizione inaffidabile (DI ≥ 0.9)
+3. **Outlier detection**: SVM ha identificato outlier
+
+### DI_threshold = 0.9:
+- **Conservativo**: Accetta solo predizioni simili al training
+- **DI < 0.9**: Predizione affidabile → `do_predict = 1`
+- **DI ≥ 0.9**: Predizione inaffidabile → `do_predict = 0`
+
+Questo protegge da:
+- ❌ Vendite premature al riavvio (modello non pronto)
+- ❌ Entry/DCA in condizioni di mercato mai viste
+- ❌ Decisioni basate su predizioni inaffidabili
 
 ## Modello PyTorch
 

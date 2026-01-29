@@ -18,9 +18,9 @@ class RyLoSStrategyMLv3(IStrategy):
     startup_candle_count: int = 50  # Massimo periodo indicatori (per FreqAI)
     # max_entry_position_adjustment rimosso - calcolato dinamicamente
     
-    # Stoploss: -10% position = -40% capital (with 4x leverage)
-    # Prevents catastrophic losses like -68% seen in backtest
-    stoploss = -0.10
+    # Stoploss: -20% position = -80% capital (with 4x leverage)
+    # Prevents catastrophic losses while allowing recovery
+    stoploss = -0.20
     
     # Max trade duration: DISABLED (let ML handle exits)
     # max_trade_duration_candles = 576  # 2 giorni (DISABLED)
@@ -41,11 +41,11 @@ class RyLoSStrategyMLv3(IStrategy):
     # Strong positive predictions → tight distance (aggressive DCA)
     # Weak/negative predictions → wide distance (conservative DCA)
     ml_dca_distance_tight = DecimalParameter(
-        0.015, 0.025, default=0.0181, space="buy", optimize=True,
+        0.015, 0.025, default=0.0219, space="buy", optimize=True,
         load=True, decimals=4
     )
     ml_dca_distance_wide = DecimalParameter(
-        0.035, 0.055, default=0.0364, space="buy", optimize=True,
+        0.035, 0.055, default=0.0353, space="buy", optimize=True,
         load=True, decimals=4
     )
 
@@ -53,11 +53,11 @@ class RyLoSStrategyMLv3(IStrategy):
     # Strong positive → tight distance
     # Weak/negative → wide distance
     ml_dca_pred_min = DecimalParameter(
-        -0.02, 0.0, default=-0.019, space="buy", optimize=True,
+        -0.02, 0.0, default=-0.0179, space="buy", optimize=True,
         load=True, decimals=4
     )
     ml_dca_pred_max = DecimalParameter(
-        0.01, 0.04, default=0.0145, space="buy", optimize=True,
+        0.01, 0.04, default=0.0164, space="buy", optimize=True,
         load=True, decimals=4
     )
 
@@ -66,17 +66,17 @@ class RyLoSStrategyMLv3(IStrategy):
     # ============================================================================
 
     first_order_pct = DecimalParameter(
-        0.005, 0.03, default=0.0175, space="buy", optimize=True,
+        0.005, 0.03, default=0.0214, space="buy", optimize=True,
         load=True, decimals=4
     )
     dca_multiplier = DecimalParameter(
-        1.5, 3.0, default=2.736, space="buy", optimize=True,
+        1.5, 3.0, default=2.665, space="buy", optimize=True,
         load=True, decimals=3
     )
 
     # DCA dinamico basato su volatilità ATR
     dca_atr_multiplier = DecimalParameter(
-        0.5, 3.0, default=0.505, space="buy", optimize=True,
+        0.5, 3.0, default=1.587, space="buy", optimize=True,
         load=True, decimals=3
     )
 
@@ -86,13 +86,13 @@ class RyLoSStrategyMLv3(IStrategy):
 
     # ML exit: focus on 5m prediction for fast scalping
     ml_exit_threshold = DecimalParameter(
-        -0.01, 0.01, default=0.0061, space="sell", optimize=True,
+        -0.01, 0.01, default=0.0034, space="sell", optimize=True,
         load=True, decimals=4
     )
 
     # Minimum profit required for ML exit (prevent premature exit)
     min_profit_for_ml_exit = DecimalParameter(
-        0.005, 0.03, default=0.0245, space="sell", optimize=True,
+        0.005, 0.03, default=0.0229, space="sell", optimize=True,
         load=True, decimals=4
     )
 
@@ -109,33 +109,33 @@ class RyLoSStrategyMLv3(IStrategy):
     # Weighted prediction thresholds (single threshold per action)
     # EXPANDED RANGES for scalping: allow more aggressive entry/exit
     ml_entry_threshold = DecimalParameter(
-        -0.01, 0.01, default=-0.0096, space="buy", optimize=True,
+        -0.01, 0.01, default=-0.0061, space="buy", optimize=True,
         load=True, decimals=4
     )
     
     # NEW: Minimum 5m prediction for entry (prevent entry with negative 5m)
     ml_entry_5m_min = DecimalParameter(
-        -0.005, 0.005, default=-0.0048, space="buy", optimize=True,
+        -0.005, 0.005, default=-0.005, space="buy", optimize=True,
         load=True, decimals=4
     )
     
     ml_dca_threshold = DecimalParameter(
-        -0.02, 0.02, default=-0.0192, space="buy", optimize=True,
+        -0.02, 0.02, default=-0.0184, space="buy", optimize=True,
         load=True, decimals=4
     )
 
     # Weights for each time horizon (normalized internally)
     # EXPANDED RANGE: allow 5m to dominate for scalping (up to 3.0)
     ml_weight_5m = DecimalParameter(
-        0.1, 3.0, default=2.21, space="buy", optimize=True,
+        0.1, 3.0, default=2.90, space="buy", optimize=True,
         load=True, decimals=2
     )
     ml_weight_15m = DecimalParameter(
-        0.1, 3.0, default=0.69, space="buy", optimize=True,
+        0.1, 3.0, default=1.58, space="buy", optimize=True,
         load=True, decimals=2
     )
     ml_weight_30m = DecimalParameter(
-        0.1, 3.0, default=2.08, space="buy", optimize=True,
+        0.1, 3.0, default=1.93, space="buy", optimize=True,
         load=True, decimals=2
     )
 
@@ -145,7 +145,7 @@ class RyLoSStrategyMLv3(IStrategy):
 
     # Crash detection: drop % in 15 minutes (3 candles @ 5m) to trigger immediate exit
     crash_detection_threshold = DecimalParameter(
-        -0.10, -0.03, default=-0.065, space="sell", optimize=True,
+        -0.10, -0.03, default=-0.045, space="sell", optimize=True,
         load=True, decimals=3
     )
 
@@ -155,11 +155,11 @@ class RyLoSStrategyMLv3(IStrategy):
 
     # ML drawdown prediction: exit if predicted drawdown exceeds threshold
     ml_drawdown_1h_threshold = DecimalParameter(
-        -0.15, -0.05, default=-0.138, space="sell", optimize=True,
+        -0.15, -0.05, default=-0.052, space="sell", optimize=True,
         load=True, decimals=3
     )
     ml_drawdown_2h_threshold = DecimalParameter(
-        -0.20, -0.08, default=-0.117, space="sell", optimize=True,
+        -0.20, -0.08, default=-0.142, space="sell", optimize=True,
         load=True, decimals=3
     )
 
@@ -167,9 +167,9 @@ class RyLoSStrategyMLv3(IStrategy):
     # FIXED STOPLOSS (fallback)
     # ============================================================================
 
-    # Fixed stoploss: -10% position = -40% capital (4x leverage)
+    # Fixed stoploss: -20% position = -80% capital (4x leverage)
     # Prevents catastrophic losses while allowing recovery
-    fixed_stoploss = -0.10
+    fixed_stoploss = -0.20
 
     # ============================================================================
     # ML CONFIDENCE-BASED STAKE SIZING (Optional - 2 optimizable)
@@ -180,11 +180,11 @@ class RyLoSStrategyMLv3(IStrategy):
 
     # Prediction range for confidence mapping
     ml_confidence_min = DecimalParameter(
-        -0.02, 0.0, default=-0.0113, space="buy", optimize=True,
+        -0.02, 0.0, default=-0.0157, space="buy", optimize=True,
         load=True, decimals=4
     )
     ml_confidence_max = DecimalParameter(
-        0.01, 0.05, default=0.0103, space="buy", optimize=True,
+        0.01, 0.05, default=0.05, space="buy", optimize=True,
         load=True, decimals=4
     )
 
@@ -607,8 +607,19 @@ class RyLoSStrategyMLv3(IStrategy):
         if trade.has_open_orders:
             return None
 
-        # Punto 2: REMOVED - No cooldown, allow immediate DCA if conditions met
-        # This allows faster DCA response to price drops
+        # Punto 2: Cooldown di 1 candela (5 minuti) dall'ultimo DCA
+        # Using official Freqtrade method with timezone-aware datetime
+        filled_entries = trade.select_filled_orders(trade.entry_side)
+        if filled_entries:
+            last_order = filled_entries[-1]
+            # trade.open_date_utc is always timezone-aware (UTC)
+            # current_time from callback is also timezone-aware
+            time_since_last_order = current_time - last_order.order_filled_date
+            candle_duration_minutes = timeframe_to_minutes(self.timeframe)
+            cooldown_candles = 1  # 1 candela = 5 minuti
+            
+            if time_since_last_order.total_seconds() < (candle_duration_minutes * 60 * cooldown_candles):
+                return None
 
         total_balance = self.wallets.get_total_stake_amount()
         max_open_trades = self.config.get("max_open_trades", 1)
@@ -674,6 +685,13 @@ class RyLoSStrategyMLv3(IStrategy):
 
         # DCA solo se: distanza sufficiente E prezzo più basso dell'ultimo ordine
         if price_distance < dynamic_distance or current_rate >= last_order_rate:
+            return None
+
+        # Check if FreqAI model is ready using official flag
+        dataframe, _ = self.dp.get_analyzed_dataframe(trade.pair, self.timeframe)
+        if len(dataframe) < 1 or dataframe["do_predict"].iloc[-1] == 0:
+            from freqtrade.loggers import logger
+            logger.debug(f"{trade.pair}: DCA skipped - model not ready (do_predict=0)")
             return None
 
         # ML FILTER: Use weighted prediction for DCA decision
@@ -811,10 +829,14 @@ class RyLoSStrategyMLv3(IStrategy):
             dataframe["&-s_close_30m"] * w_30m
         ) / total_weight
 
-        # Entry condition: weighted prediction above threshold AND 5m not too negative
+        # Check if FreqAI model is ready using official flag
+        model_ready = dataframe["do_predict"] == 1
+
+        # Entry condition: weighted prediction above threshold AND 5m not too negative AND model ready
         entry_condition = (
             (dataframe["weighted_pred"] > self.ml_entry_threshold.value) &
-            (dataframe["&-s_close_5m"] > self.ml_entry_5m_min.value)
+            (dataframe["&-s_close_5m"] > self.ml_entry_5m_min.value) &
+            model_ready
         )
 
         # Set entry signal
@@ -962,6 +984,13 @@ class RyLoSStrategyMLv3(IStrategy):
         - Profit > min_profit_for_ml_exit AND 5m prediction < ml_exit_threshold
         """
         from freqtrade.loggers import logger
+
+        # Check if FreqAI model is ready using official flag
+        dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
+        if len(dataframe) < 1 or dataframe["do_predict"].iloc[-1] == 0:
+            from freqtrade.loggers import logger
+            logger.debug(f"{pair}: ML exit skipped - model not ready (do_predict=0)")
+            return None
 
         # PRIORITY 1: ML exit if we have minimum profit
         if current_profit > self.min_profit_for_ml_exit.value:
