@@ -116,6 +116,9 @@ class RyLoSStrategy(IStrategy):
     # Trailing stop statico disabilitato: sostituito dal trailing close passivbot
     trailing_stop = False
 
+    # Cache incrementale per _window_extremes (svuotata a ogni epoch)
+    _extremes_cache: dict = {}
+
     def leverage(
         self,
         pair: str,
@@ -142,19 +145,39 @@ class RyLoSStrategy(IStrategy):
 
         return total_value
 
-    def _candles_window(self, pair: str, start_time: datetime, current_time) -> DataFrame | None:
-        """Candele analizzate tra start_time (escluso) e current_time (incluso)"""
+    def _window_extremes(
+        self, pair: str, anchor_time: datetime, current_time
+    ) -> tuple[float, float] | None:
+        """
+        (max high, min low) delle candele tra anchor_time (escluso) e
+        current_time (incluso). Chiamata a ogni candela durante il backtest:
+        usa una cache incrementale per candela (O(1) ammortizzato) — i valori
+        dipendono solo dalle candele, non dai parametri, quindi la cache è
+        sempre valida per lo stesso anchor.
+        """
         dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
         if dataframe.empty:
             return None
-        # searchsorted (O(log n)) invece di maschere booleane (O(n)):
-        # questa funzione viene chiamata a ogni candela durante il backtest
         dates = dataframe["date"]
-        start_idx = dates.searchsorted(start_time, side="right")
-        end_idx = dates.searchsorted(current_time, side="right")
+        start_idx = int(dates.searchsorted(anchor_time, side="right"))
+        end_idx = int(dates.searchsorted(current_time, side="right"))
         if start_idx >= end_idx:
             return None
-        return dataframe.iloc[start_idx:end_idx]
+
+        key = (pair, anchor_time)
+        cached = self._extremes_cache.get(key)
+        if cached is not None and start_idx < cached[0] <= end_idx:
+            scan_from, high_max, low_min = cached
+        else:
+            scan_from, high_max, low_min = start_idx, float("-inf"), float("inf")
+
+        if end_idx > scan_from:
+            segment = dataframe.iloc[scan_from:end_idx]
+            high_max = max(high_max, segment["high"].max())
+            low_min = min(low_min, segment["low"].min())
+
+        self._extremes_cache[key] = (end_idx, high_max, low_min)
+        return high_max, low_min
 
     def custom_stake_amount(
         self,
@@ -397,10 +420,10 @@ class RyLoSStrategy(IStrategy):
             return None
 
         # Minimo raggiunto dall'ultimo fill
-        window = self._candles_window(trade.pair, last_fill_time, current_time)
+        extremes = self._window_extremes(trade.pair, last_fill_time, current_time)
         lowest_since_last = current_rate
-        if window is not None:
-            lowest_since_last = min(window["low"].min(), current_rate)
+        if extremes is not None:
+            lowest_since_last = min(extremes[1], current_rate)
 
         # Threshold: la discesa dal fill al minimo deve superare la distanza dinamica
         drop_from_last = (last_order_price - lowest_since_last) / last_order_price
@@ -454,6 +477,10 @@ class RyLoSStrategy(IStrategy):
         return dataframe
 
     def populate_entry_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
+        # Nuovo epoch/backtest: svuota la cache degli estremi (solo memoria,
+        # i valori restano comunque validi tra epoch)
+        self._extremes_cache.clear()
+
         # Multi-Oscillator Oversold: conta quanti indicatori sono in oversold (4 attivi)
         rsi_oversold = (
             (dataframe["rsi"] < self.rsi_oversold_threshold.value).fillna(False).astype(int)
@@ -533,9 +560,9 @@ class RyLoSStrategy(IStrategy):
                 last_fill_time = filled_entries[-1].order_filled_date.replace(
                     tzinfo=timezone.utc
                 )
-                window = self._candles_window(pair, last_fill_time, current_time)
-                if window is not None:
-                    max_since_open = max(window["high"].max(), current_rate)
+                extremes = self._window_extremes(pair, last_fill_time, current_time)
+                if extremes is not None:
+                    max_since_open = max(extremes[0], current_rate)
                     threshold_price = trade.open_rate * (
                         1 + self.close_trailing_threshold_pct.value
                     )
