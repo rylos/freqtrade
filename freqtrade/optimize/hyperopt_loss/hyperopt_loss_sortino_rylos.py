@@ -1,17 +1,23 @@
 """
 SortinoRyLoSHyperOptLoss
 
-Sortino-based loss function with passivbot-style guardrails.
+Sortino-based loss function mirroring the passivbot eq8 scoring set
+(top config dd39 for HYPE): growth + sortino as reward, and the same
+risk axes passivbot minimizes — drawdown, equity recovery days,
+position held days — as continuous penalties.
 
 Design notes (from passivbot optimizer research on grid/DCA strategies):
 - On DCA strategies that close almost only in profit, realized-PnL Sortino is
-  degenerate: downside deviation tends to 0 and the ratio explodes, rewarding
-  configs that simply never close losing positions. The ratio is therefore
-  capped, and the real risk (unrealized drawdown, time stuck in a position) is
-  penalized explicitly.
-- Guardrails mirror the passivbot optimize limits used for HYPE:
-  relative drawdown > 45% and positions held longer than 20 days are penalized
-  progressively (soft limits, not hard rejections).
+  degenerate: downside deviation tends to 0 and the ratio explodes. The ratio
+  is capped and a log profit bonus acts as tie-breaker inside the cap.
+- passivbot scoring objectives mapped here:
+  adg -> profit bonus | sortino_ratio -> capped sortino
+  drawdown_worst -> guardrail penalty (>45%)
+  strategy_eq_recovery_days_max -> continuous log penalty (limit 12d in
+  passivbot) | position_held_days_max -> continuous log penalty + hard
+  guardrail >20d
+- Trade frequency reward (log trades/day) biases toward scalping: more
+  trades, shorter durations.
 """
 
 import math
@@ -26,21 +32,25 @@ from freqtrade.optimize.hyperopt import IHyperOptLoss
 # Cap for the annualized Sortino ratio: above this the metric no longer
 # discriminates (degenerate all-wins regime).
 SORTINO_CAP = 15.0
-# Soft limits (passivbot-style guardrails)
+# Guardrails (passivbot-style limits)
 MAX_RELATIVE_DRAWDOWN = 0.45
 MAX_POSITION_HELD_DAYS = 20.0
-# Penalty scaling: 10% drawdown excess costs 4 Sortino points;
-# each day held beyond the limit costs 0.2 points.
 DRAWDOWN_PENALTY_SCALE = 40.0
-HELD_DAYS_PENALTY_SCALE = 0.2
+HELD_DAYS_GUARDRAIL_SCALE = 0.2
+# Continuous risk axes (passivbot scoring: recovery_days_max, held_days_max)
+RECOVERY_DAYS_PENALTY_SCALE = 0.6
+HELD_DAYS_PENALTY_SCALE = 0.6
+# Scalping bias: reward trade frequency (log of trades/day)
+TRADE_FREQUENCY_REWARD_SCALE = 1.0
 
 
 class SortinoRyLoSHyperOptLoss(IHyperOptLoss):
     """
     Defines the loss function for hyperopt.
 
-    Annualized daily Sortino ratio (capped) minus progressive penalties on
-    max relative drawdown and worst position holding time.
+    Capped daily Sortino + log profit bonus + trade frequency reward,
+    minus penalties on drawdown, equity recovery time and position
+    holding time (passivbot eq8 scoring mapped to a single scalar).
     """
 
     @staticmethod
@@ -53,15 +63,21 @@ class SortinoRyLoSHyperOptLoss(IHyperOptLoss):
         starting_balance: float,
         **kwargs,
     ) -> float:
-        sortino = SortinoRyLoSHyperOptLoss._daily_sortino(results, min_date, max_date)
+        sortino, recovery_days_max = SortinoRyLoSHyperOptLoss._daily_metrics(
+            results, min_date, max_date
+        )
 
-        # Tie-breaker: molte config DCA saturano il cap Sortino (win rate ~99%);
-        # un bonus logaritmico sul profitto totale discrimina dentro il cap
-        # restando piccolo rispetto alla scala del Sortino.
+        # Tie-breaker dentro il cap Sortino (win rate ~99% -> molte config al cap)
         total_profit_ratio = results["profit_abs"].sum() / starting_balance
         profit_bonus = math.log1p(max(0.0, total_profit_ratio))
 
-        # Guardrail 1: max relative drawdown on the realized equity curve
+        # Scalping bias: più trade al giorno
+        backtest_days = max((max_date - min_date).total_seconds() / 86400, 1.0)
+        frequency_reward = (
+            math.log1p(trade_count / backtest_days) * TRADE_FREQUENCY_REWARD_SCALE
+        )
+
+        # Drawdown guardrail (passivbot limit: drawdown_worst > 0.45)
         try:
             drawdown = calculate_max_drawdown(
                 results, starting_balance=starting_balance, relative=True
@@ -71,14 +87,30 @@ class SortinoRyLoSHyperOptLoss(IHyperOptLoss):
             max_dd = 0.0
         dd_penalty = max(0.0, max_dd - MAX_RELATIVE_DRAWDOWN) * DRAWDOWN_PENALTY_SCALE
 
-        # Guardrail 2: worst position holding time (anti-bag)
-        max_held_days = results["trade_duration"].max() / (60 * 24)
-        held_penalty = max(0.0, max_held_days - MAX_POSITION_HELD_DAYS) * HELD_DAYS_PENALTY_SCALE
+        # passivbot: strategy_eq_recovery_days_max (min) — tempo sott'acqua
+        recovery_penalty = math.log1p(recovery_days_max) * RECOVERY_DAYS_PENALTY_SCALE
 
-        return -(sortino + profit_bonus - dd_penalty - held_penalty)
+        # passivbot: position_held_days_max (min) — continua + guardrail >20gg
+        max_held_days = results["trade_duration"].max() / (60 * 24)
+        held_penalty = math.log1p(max_held_days) * HELD_DAYS_PENALTY_SCALE
+        held_penalty += (
+            max(0.0, max_held_days - MAX_POSITION_HELD_DAYS) * HELD_DAYS_GUARDRAIL_SCALE
+        )
+
+        return -(
+            sortino
+            + profit_bonus
+            + frequency_reward
+            - dd_penalty
+            - recovery_penalty
+            - held_penalty
+        )
 
     @staticmethod
-    def _daily_sortino(results: DataFrame, min_date: datetime, max_date: datetime) -> float:
+    def _daily_metrics(
+        results: DataFrame, min_date: datetime, max_date: datetime
+    ) -> tuple[float, float]:
+        """(sortino annualizzato cappato, recovery_days_max dell'equity realizzata)"""
         resample_freq = "1D"
         slippage_per_trade_ratio = 0.0005
         days_in_year = 365
@@ -91,9 +123,17 @@ class SortinoRyLoSHyperOptLoss(IHyperOptLoss):
         t_index = date_range(start=min_date, end=max_date, freq=resample_freq, normalize=True)
         sum_daily = (
             results.resample(resample_freq, on="close_date")
-            .agg({"profit_ratio_after_slippage": "sum"})
+            .agg({"profit_ratio_after_slippage": "sum", "profit_abs": "sum"})
             .reindex(t_index)
             .fillna(0)
+        )
+
+        # recovery_days_max: streak massimo di giorni consecutivi sotto il picco
+        equity = sum_daily["profit_abs"].cumsum()
+        underwater = equity < equity.cummax()
+        groups = (~underwater).cumsum()
+        recovery_days_max = (
+            float(underwater.groupby(groups).sum().max()) if underwater.any() else 0.0
         )
 
         total_profit = sum_daily["profit_ratio_after_slippage"] - minimum_acceptable_return
@@ -104,9 +144,10 @@ class SortinoRyLoSHyperOptLoss(IHyperOptLoss):
         down_stdev = math.sqrt((downside**2).sum() / len(downside))
 
         if down_stdev == 0:
-            # All-wins regime: reward positive growth but never beyond the cap,
-            # so "never realize a loss" cannot dominate the score.
-            return SORTINO_CAP if expected_returns_mean > 0 else -20.0
-
-        sortino = expected_returns_mean / down_stdev * math.sqrt(days_in_year)
-        return min(sortino, SORTINO_CAP)
+            # All-wins: premia la crescita ma mai oltre il cap
+            sortino = SORTINO_CAP if expected_returns_mean > 0 else -20.0
+        else:
+            sortino = min(
+                expected_returns_mean / down_stdev * math.sqrt(days_in_year), SORTINO_CAP
+            )
+        return sortino, recovery_days_max
