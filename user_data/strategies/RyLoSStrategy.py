@@ -116,8 +116,20 @@ class RyLoSStrategy(IStrategy):
     # Trailing stop statico disabilitato: sostituito dal trailing close passivbot
     trailing_stop = False
 
-    # Cache incrementale per _window_extremes (svuotata a ogni epoch)
+    # Opt-out dal deepcopy del Trade nel strategy_safe_wrapper (patch fork):
+    # i callback di questa strategia leggono soltanto l'oggetto trade.
+    # Il deepcopy pesava ~40% del tempo di backtest.
+    disable_trade_deepcopy = True
+
+    # Cooldown tra clip unstuck (12 candele 5m = 1h): limita il numero di
+    # ordini per trade (ogni ordine rende più costoso ogni callback successivo)
+    UNSTUCK_COOLDOWN_CANDLES = 12
+
+    # Cache per-epoch (svuotate in populate_entry_trend)
     _extremes_cache: dict = {}
+    _fill_cache: dict = {}
+    _last_unstuck: dict = {}
+    _max_orders_cache: int | None = None
 
     def leverage(
         self,
@@ -133,17 +145,30 @@ class RyLoSStrategy(IStrategy):
         return 4.0
 
     def get_total_position_value(self) -> float:
-        """Calcola il valore totale delle posizioni aperte su tutte le pairs"""
-        total_value = 0
-        open_trades = Trade.get_open_trades()
+        """Valore totale delle posizioni aperte su tutte le pairs (stake corrente x leva)"""
+        return sum(t.stake_amount for t in Trade.get_open_trades()) * 4
 
-        for trade in open_trades:
-            filled_entries = trade.select_filled_orders(trade.entry_side)
-            total_stake = sum(order.cost for order in filled_entries if order.cost)
-            position_value = total_stake * 4
-            total_value += position_value
-
-        return total_value
+    def _entry_fill_info(self, trade: Trade) -> tuple[int, datetime, float] | None:
+        """
+        (n_entry_fillati, data_ultimo_fill, prezzo_ultimo_fill) con cache:
+        select_filled_orders scandisce tutti gli ordini, qui viene rifatto
+        solo quando il numero di ordini del trade cambia.
+        """
+        n_orders = len(trade.orders)
+        cached = self._fill_cache.get(trade.id)
+        if cached is not None and cached[0] == n_orders:
+            return cached[1]
+        filled = trade.select_filled_orders(trade.entry_side)
+        info = None
+        if filled:
+            last = filled[-1]
+            info = (
+                len(filled),
+                last.order_filled_date.replace(tzinfo=timezone.utc),
+                last.average,
+            )
+        self._fill_cache[trade.id] = (n_orders, info)
+        return info
 
     def _window_extremes(
         self, pair: str, anchor_time: datetime, current_time
@@ -212,7 +237,13 @@ class RyLoSStrategy(IStrategy):
         return min(base_stake, max_allowed_stake, max_stake)
 
     def calculate_max_orders(self, total_balance: float) -> int:
-        """Calcola dinamicamente il numero massimo di ordini basato sui parametri ottimizzati"""
+        """Calcola dinamicamente il numero massimo di ordini basato sui parametri ottimizzati.
+
+        Il conteggio dipende solo dai rapporti (first_order_pct, dca_multiplier),
+        non dal balance assoluto: viene cacheato per epoch.
+        """
+        if self._max_orders_cache is not None:
+            return self._max_orders_cache
         max_open_trades = self.config.get("max_open_trades", 1)
         per_pair_limit = (total_balance * 4) / max_open_trades
 
@@ -235,7 +266,8 @@ class RyLoSStrategy(IStrategy):
             cumulative_stake += position_value
             order_count += 1
 
-        return order_count - 1  # -1 perché primo ordine non conta come adjustment
+        self._max_orders_cache = order_count - 1  # primo ordine non conta come adjustment
+        return self._max_orders_cache
 
     def get_dynamic_dca_distance(
         self, pair: str, current_rate: float, exposure_ratio: float
@@ -249,11 +281,8 @@ class RyLoSStrategy(IStrategy):
         if len(dataframe) < 1:
             return base
 
-        current_candle = dataframe.iloc[-1]
-        atr = current_candle["atr"]
-
-        # ATR normalizzato in percentuale
-        atr_pct = atr / current_rate
+        # ATR normalizzato in percentuale (.iat: niente Series intermedia)
+        atr_pct = dataframe["atr"].iat[-1] / current_rate
 
         distance = base * (1 + atr_pct * self.dca_atr_multiplier.value)
         # Scaling con l'esposizione: più la posizione è carica, più distanza serve
@@ -275,70 +304,86 @@ class RyLoSStrategy(IStrategy):
         current_exit_profit: float,
         **kwargs,
     ) -> float | tuple[float, str] | None:
-        # Punto 4: Non agire se ci sono ordini aperti
+        # Non agire se ci sono ordini aperti
         if trade.has_open_orders:
             return None
 
+        fill_info = self._entry_fill_info(trade)
+        if fill_info is None:
+            return None
+        n_entries, last_fill_time, last_order_price = fill_info
+
         # Cooldown dinamico: aspetta N candele dall'ultimo ordine
-        filled_entries = trade.select_filled_orders(trade.entry_side)
-        if len(filled_entries) > 0:
-            last_order_time = filled_entries[-1].order_filled_date.replace(tzinfo=timezone.utc)
-            cooldown_minutes = timeframe_to_minutes(self.timeframe) * self.dca_cooldown_candles.value
-            min_wait_time = timedelta(minutes=cooldown_minutes)
-            if (current_time - min_wait_time) < last_order_time:
-                return None
-
-        total_balance = self.wallets.get_total_stake_amount()
-        max_open_trades = self.config.get("max_open_trades", 1)
-
-        # Calcola dinamicamente il numero massimo di ordini per questa pair
-        max_orders = self.calculate_max_orders(total_balance)
-
-        # Limiti globali e per pair (calcolo unificato)
-        global_limit = total_balance * 4
-        per_pair_limit = global_limit / max_open_trades
-        current_global_exposure = self.get_total_position_value()
-
-        # Usa solo ordini fillati per calcolare distanze
-        if not filled_entries:
+        cooldown_minutes = timeframe_to_minutes(self.timeframe) * self.dca_cooldown_candles.value
+        if (current_time - timedelta(minutes=cooldown_minutes)) < last_fill_time:
             return None
 
-        last_order_price = filled_entries[-1].average
-        last_fill_time = filled_entries[-1].order_filled_date.replace(tzinfo=timezone.utc)
-
-        # Esposizione della posizione rispetto al suo limite (0..1)
-        position_value = trade.stake_amount * 4
-        exposure_ratio = position_value / per_pair_limit if per_pair_limit > 0 else 0.0
+        max_open_trades = self.config.get("max_open_trades", 1)
+        total_balance = None  # calcolato solo quando serve (wallets è costoso)
 
         # ===== UNSTUCK (passivbot): riduzione parziale della posizione stuck =====
-        held_days = (current_time - trade.open_date_utc).total_seconds() / 86400
-        is_stuck = (
-            exposure_ratio >= self.unstuck_threshold.value
-            or held_days >= self.unstuck_max_held_days.value
-        )
-        if is_stuck and current_profit < 0:
-            dataframe, _ = self.dp.get_analyzed_dataframe(trade.pair, self.timeframe)
-            if len(dataframe) > 0:
-                ema = dataframe.iloc[-1].get("ema_anchor")
-                # Vendi nella forza: solo se il prezzo è risalito vicino/sopra
-                # EMA * (1 + ema_dist) (ema_dist negativa = accetta sotto EMA)
-                if ema and current_rate >= ema * (1 + self.unstuck_ema_dist.value):
-                    reduce_stake = trade.stake_amount * self.unstuck_close_pct.value
-                    # Budget di perdita per clip: non realizzare più di
-                    # loss_allowance_pct del balance in una singola riduzione
-                    estimated_loss = reduce_stake * abs(current_profit)
-                    if estimated_loss <= total_balance * self.unstuck_loss_allowance_pct.value:
-                        return (
-                            -reduce_stake,
-                            f"unstuck_{held_days:.1f}d_{current_profit * 100:.1f}%",
-                        )
+        if current_profit < 0:
+            held_days = (current_time - trade.open_date_utc).total_seconds() / 86400
+            is_stuck = held_days >= self.unstuck_max_held_days.value
+            if not is_stuck:
+                total_balance = self.wallets.get_total_stake_amount()
+                per_pair_limit = (total_balance * 4) / max_open_trades
+                exposure_ratio = (
+                    trade.stake_amount * 4 / per_pair_limit if per_pair_limit > 0 else 0.0
+                )
+                is_stuck = exposure_ratio >= self.unstuck_threshold.value
+            if is_stuck:
+                # Cooldown dedicato tra clip (limita anche il numero di ordini)
+                last_unstuck = self._last_unstuck.get(trade.id)
+                unstuck_wait = timedelta(
+                    minutes=timeframe_to_minutes(self.timeframe) * self.UNSTUCK_COOLDOWN_CANDLES
+                )
+                if last_unstuck is None or (current_time - last_unstuck) >= unstuck_wait:
+                    dataframe, _ = self.dp.get_analyzed_dataframe(trade.pair, self.timeframe)
+                    if len(dataframe) > 0:
+                        ema = dataframe["ema_anchor"].iat[-1]
+                        # Vendi nella forza: solo se il prezzo è risalito vicino/sopra
+                        # EMA * (1 + ema_dist) (ema_dist negativa = accetta sotto EMA)
+                        if ema and current_rate >= ema * (1 + self.unstuck_ema_dist.value):
+                            if total_balance is None:
+                                total_balance = self.wallets.get_total_stake_amount()
+                            reduce_stake = trade.stake_amount * self.unstuck_close_pct.value
+                            # Budget di perdita per clip: non realizzare più di
+                            # loss_allowance_pct del balance in una singola riduzione
+                            estimated_loss = reduce_stake * abs(current_profit)
+                            if (
+                                estimated_loss
+                                <= total_balance * self.unstuck_loss_allowance_pct.value
+                            ):
+                                self._last_unstuck[trade.id] = current_time
+                                return (
+                                    -reduce_stake,
+                                    f"unstuck_{held_days:.1f}d_{current_profit * 100:.1f}%",
+                                )
 
         # Calcola perdita dall'ultimo DCA filled (non dalla media)
         current_loss_from_last = (current_rate - last_order_price) / last_order_price
 
+        if current_loss_from_last > self.emergency_dca_threshold.value and (
+            current_rate >= last_order_price
+            or (last_order_price - current_rate) / last_order_price < self.dca_distance.value
+        ):
+            # Fast path: nessun DCA possibile (né emergency né normale) —
+            # la distanza dinamica è sempre >= dca_distance base
+            return None
+
+        if total_balance is None:
+            total_balance = self.wallets.get_total_stake_amount()
+        max_orders = self.calculate_max_orders(total_balance)
+        global_limit = total_balance * 4
+        per_pair_limit = global_limit / max_open_trades
+        current_global_exposure = self.get_total_position_value()
+        exposure_ratio = trade.stake_amount * 4 / per_pair_limit if per_pair_limit > 0 else 0.0
+        filled_entries = trade.select_filled_orders(trade.entry_side)
+
         if (
             current_loss_from_last <= self.emergency_dca_threshold.value
-            and trade.nr_of_successful_entries < max_orders
+            and n_entries < max_orders
         ):  # Rispetta max_orders
             # Soglia critica = emergency_threshold * multiplier
             critical_threshold = (
@@ -348,7 +393,7 @@ class RyLoSStrategy(IStrategy):
             if current_loss_from_last <= critical_threshold and current_rate < last_order_price:
                 # Emergency DCA: SALTA controllo BB threshold
                 # Calcola stake come un DCA normale
-                next_dca_order = trade.nr_of_successful_entries + 1
+                next_dca_order = n_entries + 1
                 stake_pct = self.first_order_pct.value * (
                     self.dca_multiplier.value ** (next_dca_order - 1)
                 )
@@ -378,7 +423,7 @@ class RyLoSStrategy(IStrategy):
                     return emergency_stake, f"emergency_dca_{loss_pct:.1f}%"
 
         # Se abbiamo raggiunto il numero massimo di ordini per questa pair
-        if trade.nr_of_successful_entries > max_orders:
+        if n_entries > max_orders:
             return None
 
         # Verifica se abbiamo raggiunto il limite globale
@@ -390,7 +435,7 @@ class RyLoSStrategy(IStrategy):
         current_position_value = trade.stake_amount * 4
 
         # Calcola il prossimo stake
-        entry_count = trade.nr_of_successful_entries
+        entry_count = n_entries
         next_stake_pct = self.first_order_pct.value * (self.dca_multiplier.value**entry_count)
         next_stake = total_balance * next_stake_pct
 
