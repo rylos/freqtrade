@@ -31,12 +31,18 @@ class RyLoSStrategy(IStrategy):
     }
 
     # Parametri ottimizzabili
+    # Total wallet exposure limit (passivbot risk.total_wallet_exposure_limit,
+    # bounds dd39 [2.5, 3]): il rischio massimo è balance * TWE,
+    # disaccoppiato dalla leva exchange (4x, che determina solo il margine)
+    total_wallet_exposure_limit = DecimalParameter(
+        2.0, 3.0, default=3.0, space="buy", optimize=True
+    )
     first_order_pct = DecimalParameter(0.005, 0.03, default=0.029, space="buy", optimize=True)
-    dca_distance = DecimalParameter(0.005, 0.05, default=0.022, space="buy", optimize=True)
-    dca_multiplier = DecimalParameter(1.5, 3.0, default=1.991, space="buy", optimize=True)
+    dca_distance = DecimalParameter(0.005, 0.035, default=0.022, space="buy", optimize=True)
+    dca_multiplier = DecimalParameter(1.2, 3.0, default=1.991, space="buy", optimize=True)
 
     # DCA dinamico basato su volatilità ATR
-    dca_atr_multiplier = DecimalParameter(0.5, 3.0, default=2.306, space="buy", optimize=True)
+    dca_atr_multiplier = DecimalParameter(0.5, 5.0, default=2.306, space="buy", optimize=True)
 
     # DCA dinamico basato su esposizione (passivbot grid_spacing_we_weight):
     # più la posizione è carica, più le distanze si allargano
@@ -111,7 +117,7 @@ class RyLoSStrategy(IStrategy):
         0.005, 0.02, default=0.0101, space="sell", optimize=True
     )
     # Anti-bag: oltre questi giorni la posizione è considerata stuck comunque
-    unstuck_max_held_days = IntParameter(5, 30, default=20, space="sell", optimize=True)
+    unstuck_max_held_days = IntParameter(5, 20, default=15, space="sell", optimize=True)
 
     # Trailing stop statico disabilitato: sostituito dal trailing close passivbot
     trailing_stop = False
@@ -220,8 +226,8 @@ class RyLoSStrategy(IStrategy):
         total_balance = self.wallets.get_total_stake_amount()
         max_open_trades = self.config.get("max_open_trades", 1)
 
-        # Limite globale e per pair
-        global_limit = total_balance * 4
+        # Limite globale e per pair (TWE passivbot, non la leva)
+        global_limit = total_balance * self.total_wallet_exposure_limit.value
         per_pair_limit = global_limit / max_open_trades
 
         # Esposizione attuale globale
@@ -245,7 +251,9 @@ class RyLoSStrategy(IStrategy):
         if self._max_orders_cache is not None:
             return self._max_orders_cache
         max_open_trades = self.config.get("max_open_trades", 1)
-        per_pair_limit = (total_balance * 4) / max_open_trades
+        per_pair_limit = (
+            total_balance * self.total_wallet_exposure_limit.value
+        ) / max_open_trades
 
         cumulative_stake = 0
         order_count = 0
@@ -327,7 +335,9 @@ class RyLoSStrategy(IStrategy):
             is_stuck = held_days >= self.unstuck_max_held_days.value
             if not is_stuck:
                 total_balance = self.wallets.get_total_stake_amount()
-                per_pair_limit = (total_balance * 4) / max_open_trades
+                per_pair_limit = (
+                    total_balance * self.total_wallet_exposure_limit.value
+                ) / max_open_trades
                 exposure_ratio = (
                     trade.stake_amount * 4 / per_pair_limit if per_pair_limit > 0 else 0.0
                 )
@@ -375,7 +385,7 @@ class RyLoSStrategy(IStrategy):
         if total_balance is None:
             total_balance = self.wallets.get_total_stake_amount()
         max_orders = self.calculate_max_orders(total_balance)
-        global_limit = total_balance * 4
+        global_limit = total_balance * self.total_wallet_exposure_limit.value
         per_pair_limit = global_limit / max_open_trades
         current_global_exposure = self.get_total_position_value()
         exposure_ratio = trade.stake_amount * 4 / per_pair_limit if per_pair_limit > 0 else 0.0
