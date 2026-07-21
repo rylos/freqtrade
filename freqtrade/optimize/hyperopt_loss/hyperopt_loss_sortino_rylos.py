@@ -29,28 +29,34 @@ from freqtrade.data.metrics import calculate_max_drawdown
 from freqtrade.optimize.hyperopt import IHyperOptLoss
 
 
-# Cap for the annualized Sortino ratio: above this the metric no longer
-# discriminates (degenerate all-wins regime).
+# Rebalanced 2026-07-21: profit-first entro rischio accettato.
+# Il profitto totale è l'asse dominante (log * 4: 10x ~ 9.6 punti,
+# 100x ~ 18.5); il Sortino resta come termine di qualità (peso 0.5).
 SORTINO_CAP = 15.0
-# Guardrails (passivbot-style limits)
+SORTINO_WEIGHT = 0.5
+PROFIT_SCALE = 4.0
+# Drawdown: gratis fino al 30% (accettato dall'utente; passivbot dd39
+# fa ~100x con dd 39%), penalità morbida 30-45%, muro oltre 45%.
+DD_FREE_THRESHOLD = 0.30
+DD_SOFT_SCALE = 20.0
 MAX_RELATIVE_DRAWDOWN = 0.45
-MAX_POSITION_HELD_DAYS = 20.0
 DRAWDOWN_PENALTY_SCALE = 40.0
-HELD_DAYS_GUARDRAIL_SCALE = 0.2
-# Continuous drawdown axes (eq8 keeps BOTH as objectives — wiki lesson
-# 2026-06-30: dropping one lets the optimizer park candidates at the cap):
-# drawdown_worst (max) and drawdown_worst_mean_1pct (mean of worst 1% of
-# daily drawdowns, robust to a single spike).
-DD_WORST_CONTINUOUS_SCALE = 5.0
-DD_MEAN_1PCT_SCALE = 8.0
-# passivbot dd39 limit: strategy_eq_recovery_days_max > 12
-MAX_RECOVERY_DAYS = 12.0
-RECOVERY_GUARDRAIL_SCALE = 0.2
-# Continuous risk axes (passivbot scoring: recovery_days_max, held_days_max)
-RECOVERY_DAYS_PENALTY_SCALE = 0.6
+DD_1PCT_FREE_THRESHOLD = 0.20
+DD_MEAN_1PCT_SCALE = 10.0
+# Recovery (equity REALIZZATA: si muove a gradini di trade chiusi, quindi
+# soglie più larghe del limit 12gg mark-to-market di passivbot)
+RECOVERY_LOG_SCALE = 0.3
+MAX_RECOVERY_DAYS = 30.0
+RECOVERY_GUARDRAIL_SCALE = 0.1
+# Anti-bag
+MAX_POSITION_HELD_DAYS = 20.0
 HELD_DAYS_PENALTY_SCALE = 0.6
-# Scalping bias: reward trade frequency (log of trades/day)
-TRADE_FREQUENCY_REWARD_SCALE = 1.0
+HELD_DAYS_GUARDRAIL_SCALE = 0.2
+# Scalping: reward frequenza rafforzato + penalità durata media oltre 5h
+MAX_AVG_DURATION_HOURS = 5.0
+DURATION_PENALTY_SCALE = 0.5
+# Continuous risk axes (passivbot scoring: recovery_days_max, held_days_max)
+TRADE_FREQUENCY_REWARD_SCALE = 1.5
 # Growth axes (passivbot adg_w / mdg_w): recency-weighted mean and median
 # daily gain over 10 trailing slices (full, last 1/2, ... last 1/10).
 # mdg is the anti-staircase axis: a flat-then-jump equity has high mean but
@@ -84,9 +90,11 @@ class SortinoRyLoSHyperOptLoss(IHyperOptLoss):
             )
         )
 
-        # Crescita (tie-breaker dentro il cap Sortino), recency-weighted:
-        # adg_w = media giornaliera, mdg_w = mediana giornaliera (anti-gradino)
-        profit_bonus = math.log1p(max(0.0, adg_w * 365))
+        # Profitto totale = asse dominante (obiettivo: config stile 100x)
+        total_profit_ratio = results["profit_abs"].sum() / starting_balance
+        profit_bonus = math.log1p(max(0.0, total_profit_ratio)) * PROFIT_SCALE
+        # Recency e costanza (adg_w / mdg_w passivbot, pesi minori)
+        adg_bonus = math.log1p(max(0.0, adg_w * 365))
         mdg_bonus = math.log1p(max(0.0, mdg_w * 365)) * MDG_REWARD_SCALE
 
         # Scalping bias: più trade al giorno
@@ -103,15 +111,13 @@ class SortinoRyLoSHyperOptLoss(IHyperOptLoss):
             max_dd = drawdown.relative_account_drawdown
         except ValueError:
             max_dd = 0.0
-        dd_penalty = max(0.0, max_dd - MAX_RELATIVE_DRAWDOWN) * DRAWDOWN_PENALTY_SCALE
-        # Assi continui: max dd sempre penalizzato (non solo oltre il cap)
-        # + media del peggior 1% dei drawdown giornalieri
-        dd_penalty += max_dd * DD_WORST_CONTINUOUS_SCALE
-        dd_penalty += dd_mean_1pct * DD_MEAN_1PCT_SCALE
+        # Gratis fino al 30%, morbida 30-45%, muro oltre 45%
+        dd_penalty = max(0.0, max_dd - DD_FREE_THRESHOLD) * DD_SOFT_SCALE
+        dd_penalty += max(0.0, max_dd - MAX_RELATIVE_DRAWDOWN) * DRAWDOWN_PENALTY_SCALE
+        dd_penalty += max(0.0, dd_mean_1pct - DD_1PCT_FREE_THRESHOLD) * DD_MEAN_1PCT_SCALE
 
-        # passivbot: strategy_eq_recovery_days_max (min) — tempo sott'acqua,
-        # continua + guardrail oltre 12 giorni (limit del config dd39)
-        recovery_penalty = math.log1p(recovery_days_max) * RECOVERY_DAYS_PENALTY_SCALE
+        # passivbot: strategy_eq_recovery_days_max (min) — tempo sott'acqua
+        recovery_penalty = math.log1p(recovery_days_max) * RECOVERY_LOG_SCALE
         recovery_penalty += (
             max(0.0, recovery_days_max - MAX_RECOVERY_DAYS) * RECOVERY_GUARDRAIL_SCALE
         )
@@ -123,14 +129,23 @@ class SortinoRyLoSHyperOptLoss(IHyperOptLoss):
             max(0.0, max_held_days - MAX_POSITION_HELD_DAYS) * HELD_DAYS_GUARDRAIL_SCALE
         )
 
+        # Penalità durata media oltre 5h (scalping)
+        avg_duration_hours = results["trade_duration"].mean() / 60
+        duration_penalty = (
+            math.log1p(max(0.0, avg_duration_hours - MAX_AVG_DURATION_HOURS))
+            * DURATION_PENALTY_SCALE
+        )
+
         return -(
-            sortino
+            sortino * SORTINO_WEIGHT
             + profit_bonus
+            + adg_bonus
             + mdg_bonus
             + frequency_reward
             - dd_penalty
             - recovery_penalty
             - held_penalty
+            - duration_penalty
         )
 
     @staticmethod
