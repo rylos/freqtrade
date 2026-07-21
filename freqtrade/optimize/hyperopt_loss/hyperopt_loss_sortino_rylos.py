@@ -33,7 +33,7 @@ from freqtrade.optimize.hyperopt import IHyperOptLoss
 # Il profitto totale è l'asse dominante (log * 4: 10x ~ 9.6 punti,
 # 100x ~ 18.5); il Sortino resta come termine di qualità (peso 0.5).
 SORTINO_CAP = 15.0
-SORTINO_WEIGHT = 0.5
+SORTINO_WEIGHT = 0.2  # sacrificabile (feedback Marco)
 PROFIT_SCALE = 4.0
 # Drawdown: gratis fino al 30% (accettato), morbido 30-40%, SQUALIFICA
 # oltre 40% — "un dd max oltre 40% non lo selezionero' mai, anche se ha
@@ -57,15 +57,16 @@ HELD_DAYS_PENALTY_SCALE = 0.6
 HELD_DAYS_GUARDRAIL_SCALE = 0.2
 # Scalping: reward frequenza rafforzato + penalità durata media oltre 5h
 MAX_AVG_DURATION_HOURS = 5.0
-DURATION_PENALTY_SCALE = 0.5
+DURATION_PENALTY_SCALE = 1.0
 # Continuous risk axes (passivbot scoring: recovery_days_max, held_days_max)
-TRADE_FREQUENCY_REWARD_SCALE = 1.5
+TRADE_FREQUENCY_REWARD_SCALE = 2.0
 # Growth axes (passivbot adg_w / mdg_w): recency-weighted mean and median
 # daily gain over 10 trailing slices (full, last 1/2, ... last 1/10).
 # mdg is the anti-staircase axis: a flat-then-jump equity has high mean but
 # ~zero median, and none of the other terms catches it.
 N_TRAILING_SLICES = 10
-MDG_REWARD_SCALE = 1.0
+ADG_REWARD_SCALE = 4.0
+MDG_REWARD_SCALE = 3.0
 
 
 class SortinoRyLoSHyperOptLoss(IHyperOptLoss):
@@ -97,7 +98,7 @@ class SortinoRyLoSHyperOptLoss(IHyperOptLoss):
         total_profit_ratio = results["profit_abs"].sum() / starting_balance
         profit_bonus = math.log1p(max(0.0, total_profit_ratio)) * PROFIT_SCALE
         # Recency e costanza (adg_w / mdg_w passivbot, pesi minori)
-        adg_bonus = math.log1p(max(0.0, adg_w * 365))
+        adg_bonus = math.log1p(max(0.0, adg_w * 365)) * ADG_REWARD_SCALE
         mdg_bonus = math.log1p(max(0.0, mdg_w * 365)) * MDG_REWARD_SCALE
 
         # Scalping bias: più trade al giorno
