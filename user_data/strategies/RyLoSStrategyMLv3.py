@@ -1,9 +1,12 @@
+from datetime import UTC
+
 import pandas as pd
 import talib.abstract as ta
 from pandas import DataFrame
 
 from freqtrade.strategy import (
     DecimalParameter,
+    IntParameter,
     IStrategy,
     Trade,
     timeframe_to_minutes,
@@ -17,11 +20,11 @@ class RyLoSStrategyMLv3(IStrategy):
     position_adjustment_enable = True
     startup_candle_count: int = 50  # Massimo periodo indicatori (per FreqAI)
     # max_entry_position_adjustment rimosso - calcolato dinamicamente
-    
+
     # Stoploss: -20% position = -80% capital (with 4x leverage)
     # Prevents catastrophic losses while allowing recovery
     stoploss = -0.20
-    
+
     # Max trade duration: DISABLED (let ML handle exits)
     # max_trade_duration_candles = 576  # 2 giorni (DISABLED)
 
@@ -41,11 +44,11 @@ class RyLoSStrategyMLv3(IStrategy):
     # Strong positive predictions → tight distance (aggressive DCA)
     # Weak/negative predictions → wide distance (conservative DCA)
     ml_dca_distance_tight = DecimalParameter(
-        0.015, 0.025, default=0.0219, space="buy", optimize=True,
+        0.010, 0.025, default=0.0188, space="buy", optimize=True,
         load=True, decimals=4
     )
     ml_dca_distance_wide = DecimalParameter(
-        0.035, 0.055, default=0.0353, space="buy", optimize=True,
+        0.020, 0.050, default=0.0369, space="buy", optimize=True,
         load=True, decimals=4
     )
 
@@ -53,11 +56,11 @@ class RyLoSStrategyMLv3(IStrategy):
     # Strong positive → tight distance
     # Weak/negative → wide distance
     ml_dca_pred_min = DecimalParameter(
-        -0.02, 0.0, default=-0.0179, space="buy", optimize=True,
+        -0.03, -0.005, default=-0.0148, space="buy", optimize=True,
         load=True, decimals=4
     )
     ml_dca_pred_max = DecimalParameter(
-        0.01, 0.04, default=0.0164, space="buy", optimize=True,
+        0.005, 0.05, default=0.0371, space="buy", optimize=True,
         load=True, decimals=4
     )
 
@@ -66,33 +69,33 @@ class RyLoSStrategyMLv3(IStrategy):
     # ============================================================================
 
     first_order_pct = DecimalParameter(
-        0.005, 0.03, default=0.0214, space="buy", optimize=True,
+        0.010, 0.035, default=0.0286, space="buy", optimize=True,
         load=True, decimals=4
     )
     dca_multiplier = DecimalParameter(
-        1.5, 3.0, default=2.665, space="buy", optimize=True,
+        1.5, 3.0, default=2.258, space="buy", optimize=True,
         load=True, decimals=3
     )
 
     # DCA dinamico basato su volatilità ATR
     dca_atr_multiplier = DecimalParameter(
-        0.5, 3.0, default=1.587, space="buy", optimize=True,
+        0.5, 3.0, default=2.728, space="buy", optimize=True,
         load=True, decimals=3
     )
 
     # ============================================================================
-    # ML EXIT THRESHOLD (1 optimizable - sell space)
+    # ML EXIT THRESHOLD (2 optimizable - sell space)
     # ============================================================================
 
     # ML exit: focus on 5m prediction for fast scalping
     ml_exit_threshold = DecimalParameter(
-        -0.01, 0.01, default=0.0034, space="sell", optimize=True,
+        -0.005, 0.01, default=0.003, space="sell", optimize=True,
         load=True, decimals=4
     )
 
     # Minimum profit required for ML exit (prevent premature exit)
     min_profit_for_ml_exit = DecimalParameter(
-        0.005, 0.03, default=0.0229, space="sell", optimize=True,
+        0.010, 0.035, default=0.0251, space="sell", optimize=True,
         load=True, decimals=4
     )
 
@@ -103,39 +106,38 @@ class RyLoSStrategyMLv3(IStrategy):
     trailing_stop = False  # DISABILITATO - usa solo custom_exit ML-driven
 
     # ============================================================================
-    # ML THRESHOLD PARAMETERS - WEIGHTED APPROACH (7 optimizable)
+    # ML THRESHOLD PARAMETERS - WEIGHTED APPROACH (6 optimizable - entry + DCA)
     # ============================================================================
 
-    # Weighted prediction thresholds (single threshold per action)
-    # EXPANDED RANGES for scalping: allow more aggressive entry/exit
+    # ML entry thresholds (USED for first entry)
     ml_entry_threshold = DecimalParameter(
-        -0.01, 0.01, default=-0.0061, space="buy", optimize=True,
+        -0.015, 0.005, default=-0.0061, space="buy", optimize=True,
         load=True, decimals=4
     )
-    
-    # NEW: Minimum 5m prediction for entry (prevent entry with negative 5m)
     ml_entry_5m_min = DecimalParameter(
-        -0.005, 0.005, default=-0.005, space="buy", optimize=True,
-        load=True, decimals=4
-    )
-    
-    ml_dca_threshold = DecimalParameter(
-        -0.02, 0.02, default=-0.0184, space="buy", optimize=True,
+        -0.010, 0.005, default=-0.005, space="buy", optimize=True,
         load=True, decimals=4
     )
 
-    # Weights for each time horizon (normalized internally)
-    # EXPANDED RANGE: allow 5m to dominate for scalping (up to 3.0)
+    # ML DCA threshold (USED for DCA filtering) - CRITICAL PARAMETER
+    # MUST be negative to allow DCA when predictions are slightly negative
+    # Range: -0.03 (very permissive) to -0.005 (restrictive)
+    ml_dca_threshold = DecimalParameter(
+        -0.030, -0.005, default=-0.015, space="buy", optimize=True,
+        load=True, decimals=4
+    )
+
+    # Weights for each time horizon (USED for both entry and DCA)
     ml_weight_5m = DecimalParameter(
-        0.1, 3.0, default=2.90, space="buy", optimize=True,
+        0.5, 4.0, default=2.90, space="buy", optimize=True,
         load=True, decimals=2
     )
     ml_weight_15m = DecimalParameter(
-        0.1, 3.0, default=1.58, space="buy", optimize=True,
+        0.5, 4.0, default=1.58, space="buy", optimize=True,
         load=True, decimals=2
     )
     ml_weight_30m = DecimalParameter(
-        0.1, 3.0, default=1.93, space="buy", optimize=True,
+        0.5, 4.0, default=1.93, space="buy", optimize=True,
         load=True, decimals=2
     )
 
@@ -145,7 +147,7 @@ class RyLoSStrategyMLv3(IStrategy):
 
     # Crash detection: drop % in 15 minutes (3 candles @ 5m) to trigger immediate exit
     crash_detection_threshold = DecimalParameter(
-        -0.10, -0.03, default=-0.045, space="sell", optimize=True,
+        -0.10, -0.04, default=-0.071, space="sell", optimize=True,
         load=True, decimals=3
     )
 
@@ -155,11 +157,11 @@ class RyLoSStrategyMLv3(IStrategy):
 
     # ML drawdown prediction: exit if predicted drawdown exceeds threshold
     ml_drawdown_1h_threshold = DecimalParameter(
-        -0.15, -0.05, default=-0.052, space="sell", optimize=True,
+        -0.20, -0.08, default=-0.141, space="sell", optimize=True,
         load=True, decimals=3
     )
     ml_drawdown_2h_threshold = DecimalParameter(
-        -0.20, -0.08, default=-0.142, space="sell", optimize=True,
+        -0.25, -0.12, default=-0.195, space="sell", optimize=True,
         load=True, decimals=3
     )
 
@@ -180,11 +182,11 @@ class RyLoSStrategyMLv3(IStrategy):
 
     # Prediction range for confidence mapping
     ml_confidence_min = DecimalParameter(
-        -0.02, 0.0, default=-0.0157, space="buy", optimize=True,
+        -0.03, -0.005, default=-0.0098, space="buy", optimize=True,
         load=True, decimals=4
     )
     ml_confidence_max = DecimalParameter(
-        0.01, 0.05, default=0.05, space="buy", optimize=True,
+        0.01, 0.05, default=0.0246, space="buy", optimize=True,
         load=True, decimals=4
     )
 
@@ -608,16 +610,22 @@ class RyLoSStrategyMLv3(IStrategy):
             return None
 
         # Punto 2: Cooldown di 1 candela (5 minuti) dall'ultimo DCA
-        # Using official Freqtrade method with timezone-aware datetime
         filled_entries = trade.select_filled_orders(trade.entry_side)
         if filled_entries:
             last_order = filled_entries[-1]
-            # trade.open_date_utc is always timezone-aware (UTC)
-            # current_time from callback is also timezone-aware
-            time_since_last_order = current_time - last_order.order_filled_date
+
+            # Ensure both datetimes are timezone-aware for comparison
+            # Use order_filled_utc which is always timezone-aware
+            last_order_time = last_order.order_filled_utc
+
+            # Make current_time timezone-aware if it isn't
+            if current_time.tzinfo is None:
+                current_time = current_time.replace(tzinfo=UTC)
+
+            time_since_last_order = current_time - last_order_time
             candle_duration_minutes = timeframe_to_minutes(self.timeframe)
             cooldown_candles = 1  # 1 candela = 5 minuti
-            
+
             if time_since_last_order.total_seconds() < (candle_duration_minutes * 60 * cooldown_candles):
                 return None
 
@@ -697,41 +705,87 @@ class RyLoSStrategyMLv3(IStrategy):
         # ML FILTER: Use weighted prediction for DCA decision
         weighted_pred = self.get_weighted_ml_prediction(trade.pair)
 
+        # Get predictions and DI for logging
+        pred_5m, pred_15m, pred_30m = self.get_ml_predictions(trade.pair)
+        dataframe, _ = self.dp.get_analyzed_dataframe(trade.pair, self.timeframe)
+        current_candle = dataframe.iloc[-1]
+        di_value = current_candle.get("DI_values", 0.0)
+        do_predict = current_candle.get("do_predict", 0)
+
+        # Determine confidence level
+        if do_predict != 1:
+            confidence_emoji = "🚫"
+            confidence_text = "OUTLIER"
+        elif di_value < 0.9:
+            confidence_emoji = "🟢"
+            confidence_text = "HIGH"
+        elif di_value < 1.5:
+            confidence_emoji = "🟡"
+            confidence_text = "MED"
+        else:
+            confidence_emoji = "🔴"
+            confidence_text = "LOW"
+
+        # Profit emoji
+        profit_emoji = "💚" if current_profit >= 0 else "🔴"
+
         if weighted_pred < self.ml_dca_threshold.value:
             # Block DCA - weighted prediction below threshold
             from freqtrade.loggers import logger
-            pred_5m, pred_15m, pred_30m = self.get_ml_predictions(trade.pair)
             logger.info(
-                f"{trade.pair}: DCA blocked by ML filter "
-                f"(weighted={weighted_pred:.4f} < threshold={self.ml_dca_threshold.value:.4f}) - "
-                f"5m={pred_5m:.4f}, 15m={pred_15m:.4f}, 30m={pred_30m:.4f} - "
-                f"weights: 5m={self.ml_weight_5m.value:.2f}, "
-                f"15m={self.ml_weight_15m.value:.2f}, "
-                f"30m={self.ml_weight_30m.value:.2f}"
+                f"{trade.pair}: 🚫 DCA BLOCKED | "
+                f"📊 5m={pred_5m*100:+.2f}% 15m={pred_15m*100:+.2f}% 30m={pred_30m*100:+.2f}% → w={weighted_pred*100:+.2f}% | "
+                f"{confidence_emoji} DI={di_value:.2f} ({confidence_text}, do_predict={int(do_predict)}) | "
+                f"{profit_emoji} profit={current_profit*100:+.1f}% | "
+                f"💡 w={weighted_pred*100:+.2f}%<{self.ml_dca_threshold.value*100:+.2f}%"
             )
             return None
 
         # DCA allowed - weighted prediction above threshold
         from freqtrade.loggers import logger
-        pred_5m, pred_15m, pred_30m = self.get_ml_predictions(trade.pair)
         logger.info(
-            f"{trade.pair}: DCA allowed by ML filter "
-            f"(weighted={weighted_pred:.4f} > threshold={self.ml_dca_threshold.value:.4f}) - "
-            f"5m={pred_5m:.4f}, 15m={pred_15m:.4f}, 30m={pred_30m:.4f}"
+            f"{trade.pair}: ➕ DCA ALLOWED | "  # noqa: RUF001
+            f"📊 5m={pred_5m*100:+.2f}% 15m={pred_15m*100:+.2f}% 30m={pred_30m*100:+.2f}% → w={weighted_pred*100:+.2f}% | "
+            f"{confidence_emoji} DI={di_value:.2f} ({confidence_text}, do_predict={int(do_predict)}) | "
+            f"{profit_emoji} profit={current_profit*100:+.1f}% | "
+            f"💡 w={weighted_pred*100:+.2f}%>{self.ml_dca_threshold.value*100:+.2f}%"
         )
 
         tag = f"dca_ml_w{weighted_pred:.4f}_{current_profit*100:.1f}%"
         return next_stake, tag
 
-    def populate_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
+    def populate_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:  # noqa: C901
         """
         CRITICAL: FreqAI must be called first.
-        Calculate minimal indicators for strategy use (ATR for DCA distance).
+        Calculate indicators for strategy use (ATR for DCA distance + multi-oscillator for entry).
         """
         dataframe = self.freqai.start(dataframe, metadata, self)
 
         # ATR for dynamic DCA distance calculation
         dataframe["atr"] = ta.ATR(dataframe, timeperiod=10)
+
+        # ========================================================================
+        # MULTI-OSCILLATOR INDICATORS (for first entry)
+        # ========================================================================
+        # RSI periodo 10 per maggiore reattività su 5min
+        dataframe["rsi"] = ta.RSI(dataframe["close"], timeperiod=10)
+
+        # Stochastic RSI periodo 10 (configurazione 10-5-3)
+        stochrsi_k, stochrsi_d = ta.STOCHRSI(
+            dataframe["close"], timeperiod=10, fastk_period=5, fastd_period=3
+        )
+        dataframe["stochrsi"] = stochrsi_k  # Usa %K (più reattivo)
+
+        # Bollinger Bands %B (20 periodi standard)
+        bb_upper, bb_middle, bb_lower = ta.BBANDS(
+            dataframe["close"], timeperiod=20, nbdevup=2.0, nbdevdn=2.0
+        )
+        dataframe["bb_percent"] = (dataframe["close"] - bb_lower) / (bb_upper - bb_lower)
+
+        # Williams %R periodo 10
+        dataframe["williams_r"] = ta.WILLR(
+            dataframe["high"], dataframe["low"], dataframe["close"], timeperiod=10
+        )
 
         # Log ML prediction values after FreqAI generates them
         if len(dataframe) > 0 and "&-s_close_5m" in dataframe.columns:
@@ -741,6 +795,10 @@ class RyLoSStrategyMLv3(IStrategy):
             pred_30m = last_candle.get("&-s_close_30m", 0.0)
             pred_dd_1h = last_candle.get("&-s_max_drawdown_1h", 0.0)
             pred_dd_2h = last_candle.get("&-s_max_drawdown_2h", 0.0)
+
+            # Get DI (Dissimilarity Index) for confidence
+            di_value = last_candle.get("DI_values", 0.0)
+            do_predict = last_candle.get("do_predict", 0)
 
             # Calculate weighted prediction
             w_5m = self.ml_weight_5m.value
@@ -768,7 +826,7 @@ class RyLoSStrategyMLv3(IStrategy):
                 # Check ML exit
                 if current_profit > self.min_profit_for_ml_exit.value and pred_5m < self.ml_exit_threshold.value:
                     status = "❌ SELL"
-                    reason = f"5m={pred_5m*100:+.2f}%<{self.ml_exit_threshold.value*100:+.2f}% | profit={current_profit*100:+.1f}%"
+                    reason = f"5m={pred_5m*100:+.2f}%<{self.ml_exit_threshold.value*100:+.2f}%"
                 # Check drawdown prediction
                 elif pred_dd_1h < self.ml_drawdown_1h_threshold.value or pred_dd_2h < self.ml_drawdown_2h_threshold.value:
                     status = "⚠️ DD ALERT"
@@ -779,7 +837,7 @@ class RyLoSStrategyMLv3(IStrategy):
                     reason = f"w={weighted*100:+.2f}%<{self.ml_dca_threshold.value*100:+.2f}%"
                 else:
                     status = "⏸️ HOLD"
-                    reason = f"profit={current_profit*100:+.1f}%"
+                    reason = None  # No reason for HOLD
             else:
                 # Not in trade - check entry conditions
                 if weighted > self.ml_entry_threshold.value and pred_5m > self.ml_entry_5m_min.value:
@@ -787,75 +845,97 @@ class RyLoSStrategyMLv3(IStrategy):
                     reason = f"w={weighted*100:+.2f}%>{self.ml_entry_threshold.value*100:+.2f}%, 5m={pred_5m*100:+.2f}%>{self.ml_entry_5m_min.value*100:+.2f}%"
                 elif weighted <= self.ml_entry_threshold.value:
                     status = "⏸️ NEUTRAL"
-                    reason = f"w={weighted*100:+.2f}%<{self.ml_entry_threshold.value*100:+.2f}%"
+                    reason = None  # No reason for NEUTRAL
                 else:
                     status = "⏸️ NEUTRAL"
-                    reason = f"5m={pred_5m*100:+.2f}%<{self.ml_entry_5m_min.value*100:+.2f}%"
+                    reason = None  # No reason for NEUTRAL
 
             from freqtrade.loggers import logger
-            logger.info(
-                f"{metadata['pair']}: 🎯 ML → "
-                f"5m={pred_5m*100:+.2f}%, 15m={pred_15m*100:+.2f}%, 30m={pred_30m*100:+.2f}% | "
-                f"w={weighted*100:+.2f}% | "
-                f"DD: 1h={pred_dd_1h*100:+.1f}%, 2h={pred_dd_2h*100:+.1f}% | "
-                f"{status} ({reason})"
+
+            # Determine confidence level based on DI threshold (0.9)
+            if do_predict != 1:
+                confidence_emoji = "🚫"
+                confidence_text = "OUTLIER"
+            elif di_value < 0.9:
+                confidence_emoji = "🟢"
+                confidence_text = "HIGH"
+            elif di_value < 1.5:
+                confidence_emoji = "🟡"
+                confidence_text = "MED"
+            else:
+                confidence_emoji = "🔴"
+                confidence_text = "LOW"
+
+            # Profit emoji (only if in trade)
+            profit_section = ""
+            if current_trade:
+                profit_emoji = "💚" if current_profit >= 0 else "🔴"
+                profit_section = f" | {profit_emoji} profit={current_profit*100:+.1f}%"
+
+            # Log in single line with clear separators
+            log_message = (
+                f"{metadata['pair']}: {status} | "
+                f"📊 5m={pred_5m*100:+.2f}% 15m={pred_15m*100:+.2f}% 30m={pred_30m*100:+.2f}% → w={weighted*100:+.2f}% | "
+                f"📉 DD 1h={pred_dd_1h*100:+.1f}% 2h={pred_dd_2h*100:+.1f}% | "
+                f"{confidence_emoji} DI={di_value:.2f} ({confidence_text}, do_predict={int(do_predict)})"
+                f"{profit_section}"
             )
+
+            # Add reason only if present
+            if reason:
+                log_message += f" | 💡 {reason}"
+
+            logger.info(log_message)
 
         return dataframe
 
     def populate_entry_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
         """
-        ML-driven entry logic using weighted predictions.
+        ML-driven entry logic (ML-only, no multi-oscillator).
 
-        Entry signal when weighted_prediction > ml_entry_threshold
+        Entry signal when:
+        1. Weighted ML prediction > ml_entry_threshold
+        2. 5m prediction > ml_entry_5m_min (prevents entry with negative short-term outlook)
+        3. Model is ready (do_predict = 1)
         """
-        # Initialize columns
-        dataframe["enter_long"] = 0
-        dataframe["enter_tag"] = ""
+        # Check if FreqAI model is ready
+        model_ready = (dataframe["do_predict"] == 1).fillna(False)
 
-        # Check if ML predictions are available
-        if "&-s_close_5m" not in dataframe.columns:
-            return dataframe
+        # Get ML predictions
+        pred_5m = dataframe.get("&-s_close_5m", 0.0)
+        pred_15m = dataframe.get("&-s_close_15m", 0.0)
+        pred_30m = dataframe.get("&-s_close_30m", 0.0)
 
-        # Calculate weighted predictions for each row
+        # Calculate weighted prediction
         w_5m = self.ml_weight_5m.value
         w_15m = self.ml_weight_15m.value
         w_30m = self.ml_weight_30m.value
         total_weight = w_5m + w_15m + w_30m
 
-        dataframe["weighted_pred"] = (
-            dataframe["&-s_close_5m"] * w_5m +
-            dataframe["&-s_close_15m"] * w_15m +
-            dataframe["&-s_close_30m"] * w_30m
-        ) / total_weight
+        weighted_pred = (pred_5m * w_5m + pred_15m * w_15m + pred_30m * w_30m) / total_weight
 
-        # Check if FreqAI model is ready using official flag
-        model_ready = dataframe["do_predict"] == 1
-
-        # Entry condition: weighted prediction above threshold AND 5m not too negative AND model ready
+        # Entry conditions (all must be true)
         entry_condition = (
-            (dataframe["weighted_pred"] > self.ml_entry_threshold.value) &
-            (dataframe["&-s_close_5m"] > self.ml_entry_5m_min.value) &
-            model_ready
+            model_ready &
+            (weighted_pred > self.ml_entry_threshold.value) &
+            (pred_5m > self.ml_entry_5m_min.value)
         )
 
-        # Set entry signal
-        dataframe.loc[entry_condition, "enter_long"] = 1
-
         # Create descriptive tags
-        for i in dataframe[entry_condition].index:
-            pred_5m = dataframe.loc[i, "&-s_close_5m"]
-            pred_15m = dataframe.loc[i, "&-s_close_15m"]
-            pred_30m = dataframe.loc[i, "&-s_close_30m"]
-            weighted = dataframe.loc[i, "weighted_pred"]
+        dataframe["enter_tag"] = ""
 
-            dataframe.loc[i, "enter_tag"] = (
-                f"buy_ml_w{weighted:.4f}_"
-                f"5m:{pred_5m:.4f}_"
-                f"15m:{pred_15m:.4f}_"
-                f"30m:{pred_30m:.4f}"
-            )
+        for i in range(len(dataframe)):
+            if entry_condition.iloc[i]:
+                w_val = weighted_pred.iloc[i]
+                p5_val = pred_5m.iloc[i]
+                p15_val = pred_15m.iloc[i]
+                p30_val = pred_30m.iloc[i]
 
+                dataframe.loc[dataframe.index[i], "enter_tag"] = (
+                    f"buy_ml_w{w_val:.4f}_5m:{p5_val:.4f}_15m:{p15_val:.4f}_30m:{p30_val:.4f}"
+                )
+
+        dataframe.loc[entry_condition, "enter_long"] = 1
         return dataframe
 
     def populate_exit_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
@@ -997,14 +1077,41 @@ class RyLoSStrategyMLv3(IStrategy):
             # Get ML predictions
             pred_5m, pred_15m, pred_30m = self.get_ml_predictions(pair)
 
-            # FOCUS ON 5M: Exit if 5m prediction is negative
+            # Get current candle for DI
+            current_candle = dataframe.iloc[-1]
+            di_value = current_candle.get("DI_values", 0.0)
+            do_predict = current_candle.get("do_predict", 0)
+
+            # Calculate weighted prediction
+            w_5m = self.ml_weight_5m.value
+            w_15m = self.ml_weight_15m.value
+            w_30m = self.ml_weight_30m.value
+            total_weight = w_5m + w_15m + w_30m
+            weighted = (pred_5m * w_5m + pred_15m * w_15m + pred_30m * w_30m) / total_weight
+
+            # Determine confidence level
+            if do_predict != 1:
+                confidence_emoji = "🚫"
+                confidence_text = "OUTLIER"
+            elif di_value < 0.9:
+                confidence_emoji = "🟢"
+                confidence_text = "HIGH"
+            elif di_value < 1.5:
+                confidence_emoji = "🟡"
+                confidence_text = "MED"
+            else:
+                confidence_emoji = "🔴"
+                confidence_text = "LOW"
+
+            # FOCUS ON 5M: Exit if 5m prediction below threshold
             # This gives fastest reaction for scalping
             if pred_5m < self.ml_exit_threshold.value:
                 logger.info(
-                    f"{pair}: ML exit triggered (5m focus) - "
-                    f"5m={pred_5m:.4f} < threshold={self.ml_exit_threshold.value:.4f} - "
-                    f"15m={pred_15m:.4f}, 30m={pred_30m:.4f} - "
-                    f"profit={current_profit*100:.2f}%"
+                    f"{pair}: ❌ SELL | "
+                    f"📊 5m={pred_5m*100:+.2f}% 15m={pred_15m*100:+.2f}% 30m={pred_30m*100:+.2f}% → w={weighted*100:+.2f}% | "
+                    f"{confidence_emoji} DI={di_value:.2f} ({confidence_text}, do_predict={int(do_predict)}) | "
+                    f"💰 profit={current_profit*100:+.2f}% | "
+                    f"💡 5m={pred_5m*100:+.2f}%<{self.ml_exit_threshold.value*100:+.2f}%"
                 )
                 return f"sell_ml_5m{pred_5m:.4f}_{current_profit*100:+.1f}%"
 
