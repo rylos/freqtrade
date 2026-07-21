@@ -6,12 +6,23 @@ from freqtrade.strategy import DecimalParameter, IntParameter, IStrategy, Trade,
 
 
 class RyLoSStrategy(IStrategy):
+    """
+    RyLoS Classic — multi-oscillator oversold entry + DCA progressivo,
+    con meccaniche passivbot (trailing_grid_v7, config dd39 HYPE/bybit_02):
+    - Entry iniziale ancorata a EMA (initial_ema_dist)
+    - DCA con conferma trailing (threshold + retracement sul rimbalzo dal minimo)
+    - Distanza DCA adattiva a volatilità (ATR) ED esposizione (we_weight)
+    - Trailing close threshold+retracement (sostituisce il trailing stop statico)
+    - Unstuck: riduzione parziale della posizione stuck vicino a EMA,
+      con budget di perdita per clip (anti-bag, position_held_days_max)
+    """
+
     timeframe = "5m"
     can_short = False
     process_only_new_candles = True
     position_adjustment_enable = True
     # max_entry_position_adjustment rimosso - calcolato dinamicamente
-    stoploss = -1  # Disabilitato, gestito da custom_exit adattivo
+    stoploss = -1  # Disabilitato, gestito da custom_exit + unstuck
 
     # ROI disabilitato - usa solo custom_exit
     minimal_roi = {
@@ -22,10 +33,26 @@ class RyLoSStrategy(IStrategy):
     first_order_pct = DecimalParameter(0.005, 0.03, default=0.029, space="buy", optimize=True)
     dca_distance = DecimalParameter(0.005, 0.05, default=0.022, space="buy", optimize=True)
     dca_multiplier = DecimalParameter(1.5, 3.0, default=1.991, space="buy", optimize=True)
-    
+
     # DCA dinamico basato su volatilità ATR
     dca_atr_multiplier = DecimalParameter(0.5, 3.0, default=2.306, space="buy", optimize=True)
-    
+
+    # DCA dinamico basato su esposizione (passivbot grid_spacing_we_weight):
+    # più la posizione è carica, più le distanze si allargano
+    dca_we_weight = DecimalParameter(0.0, 6.0, default=4.987, space="buy", optimize=True)
+
+    # Trailing entry per DCA (passivbot entry trailing_retracement_pct):
+    # dopo la discesa serve un rimbalzo confermato dal minimo prima di comprare
+    dca_trailing_retracement_pct = DecimalParameter(
+        0.002, 0.02, default=0.0138, space="buy", optimize=True
+    )
+
+    # Ancoraggio EMA per il primo ordine (passivbot initial_ema_dist):
+    # entra solo se il prezzo è sotto EMA * (1 + dist), dist negativa
+    initial_ema_dist = DecimalParameter(-0.02, 0.0, default=-0.0078, space="buy", optimize=True)
+    # Span EMA in candele 5m (~340 min, passivbot ema_span 320/360)
+    ema_span_candles = IntParameter(40, 100, default=68, space="buy", optimize=False)
+
     # DCA cooldown dinamico (numero di candele da aspettare)
     dca_cooldown_candles = IntParameter(1, 5, default=2, space="buy", optimize=False)
 
@@ -65,14 +92,28 @@ class RyLoSStrategy(IStrategy):
         0.01, 0.10, default=0.017, space="sell", optimize=True
     )
 
-    # Auto-Reduce per over-exposure (disabilitato)
-    auto_reduce_enabled = False  # Disabilitato - causava Loss in backtest
+    # Trailing close passivbot (close trailing_threshold/retracement, config dd39):
+    # exit quando il massimo dall'ultimo fill supera avg_price*(1+threshold)
+    # e il prezzo ritraccia di retracement dal massimo
+    close_trailing_threshold_pct = DecimalParameter(
+        0.005, 0.03, default=0.0145, space="sell", optimize=True
+    )
+    close_trailing_retracement_pct = DecimalParameter(
+        0.001, 0.01, default=0.0016, space="sell", optimize=True
+    )
 
-    # Trailing stop (ottimizzato da hyperopt)
-    trailing_stop = True
-    trailing_stop_positive = 0.227
-    trailing_stop_positive_offset = 0.315
-    trailing_only_offset_is_reached = False
+    # Unstuck passivbot: riduzione parziale della posizione stuck
+    unstuck_threshold = DecimalParameter(0.3, 0.7, default=0.445, space="sell", optimize=True)
+    unstuck_close_pct = DecimalParameter(0.03, 0.10, default=0.051, space="sell", optimize=True)
+    unstuck_ema_dist = DecimalParameter(-0.15, 0.0, default=-0.1076, space="sell", optimize=True)
+    unstuck_loss_allowance_pct = DecimalParameter(
+        0.005, 0.02, default=0.0101, space="sell", optimize=True
+    )
+    # Anti-bag: oltre questi giorni la posizione è considerata stuck comunque
+    unstuck_max_held_days = IntParameter(5, 30, default=20, space="sell", optimize=True)
+
+    # Trailing stop statico disabilitato: sostituito dal trailing close passivbot
+    trailing_stop = False
 
     def leverage(
         self,
@@ -99,6 +140,16 @@ class RyLoSStrategy(IStrategy):
             total_value += position_value
 
         return total_value
+
+    def _candles_window(self, pair: str, start_time: datetime, current_time) -> DataFrame | None:
+        """Candele analizzate tra start_time (escluso) e current_time (incluso)"""
+        dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
+        if dataframe.empty:
+            return None
+        window = dataframe.loc[
+            (dataframe["date"] > start_time) & (dataframe["date"] <= current_time)
+        ]
+        return window if not window.empty else None
 
     def custom_stake_amount(
         self,
@@ -158,21 +209,28 @@ class RyLoSStrategy(IStrategy):
 
         return order_count - 1  # -1 perché primo ordine non conta come adjustment
 
-    def get_dynamic_dca_distance(self, pair: str, current_rate: float) -> float:
-        """Calcola distanza DCA dinamica: dca_distance × (1 + ATR% × multiplier)"""
+    def get_dynamic_dca_distance(
+        self, pair: str, current_rate: float, exposure_ratio: float
+    ) -> float:
+        """
+        Distanza DCA dinamica (passivbot grid_spacing con volatility/we weight):
+        dca_distance * (1 + ATR% * atr_mult) * (1 + exposure_ratio * we_weight)
+        """
         dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
+        base = self.dca_distance.value
         if len(dataframe) < 1:
-            return self.dca_distance.value
-        
+            return base
+
         current_candle = dataframe.iloc[-1]
         atr = current_candle["atr"]
-        
+
         # ATR normalizzato in percentuale
         atr_pct = atr / current_rate
-        
-        # Distanza dinamica: base × (1 + volatilità × multiplier)
-        distance = self.dca_distance.value * (1 + atr_pct * self.dca_atr_multiplier.value)
-        
+
+        distance = base * (1 + atr_pct * self.dca_atr_multiplier.value)
+        # Scaling con l'esposizione: più la posizione è carica, più distanza serve
+        distance *= 1 + max(0.0, exposure_ratio) * self.dca_we_weight.value
+
         return distance
 
     def adjust_trade_position(
@@ -192,8 +250,8 @@ class RyLoSStrategy(IStrategy):
         # Punto 4: Non agire se ci sono ordini aperti
         if trade.has_open_orders:
             return None
-        
-        # Cooldown dinamico: aspetta N candele dall'ultimo DCA
+
+        # Cooldown dinamico: aspetta N candele dall'ultimo ordine
         filled_entries = trade.select_filled_orders(trade.entry_side)
         if len(filled_entries) > 0:
             last_order_time = filled_entries[-1].order_filled_date.replace(tzinfo=timezone.utc)
@@ -201,7 +259,7 @@ class RyLoSStrategy(IStrategy):
             min_wait_time = timedelta(minutes=cooldown_minutes)
             if (current_time - min_wait_time) < last_order_time:
                 return None
-        
+
         total_balance = self.wallets.get_total_stake_amount()
         max_open_trades = self.config.get("max_open_trades", 1)
 
@@ -216,9 +274,37 @@ class RyLoSStrategy(IStrategy):
         # Usa solo ordini fillati per calcolare distanze
         if not filled_entries:
             return None
-        
+
         last_order_price = filled_entries[-1].average
-        
+        last_fill_time = filled_entries[-1].order_filled_date.replace(tzinfo=timezone.utc)
+
+        # Esposizione della posizione rispetto al suo limite (0..1)
+        position_value = trade.stake_amount * 4
+        exposure_ratio = position_value / per_pair_limit if per_pair_limit > 0 else 0.0
+
+        # ===== UNSTUCK (passivbot): riduzione parziale della posizione stuck =====
+        held_days = (current_time - trade.open_date_utc).total_seconds() / 86400
+        is_stuck = (
+            exposure_ratio >= self.unstuck_threshold.value
+            or held_days >= self.unstuck_max_held_days.value
+        )
+        if is_stuck and current_profit < 0:
+            dataframe, _ = self.dp.get_analyzed_dataframe(trade.pair, self.timeframe)
+            if len(dataframe) > 0:
+                ema = dataframe.iloc[-1].get("ema_anchor")
+                # Vendi nella forza: solo se il prezzo è risalito vicino/sopra
+                # EMA * (1 + ema_dist) (ema_dist negativa = accetta sotto EMA)
+                if ema and current_rate >= ema * (1 + self.unstuck_ema_dist.value):
+                    reduce_stake = trade.stake_amount * self.unstuck_close_pct.value
+                    # Budget di perdita per clip: non realizzare più di
+                    # loss_allowance_pct del balance in una singola riduzione
+                    estimated_loss = reduce_stake * abs(current_profit)
+                    if estimated_loss <= total_balance * self.unstuck_loss_allowance_pct.value:
+                        return (
+                            -reduce_stake,
+                            f"unstuck_{held_days:.1f}d_{current_profit * 100:.1f}%",
+                        )
+
         # Calcola perdita dall'ultimo DCA filled (non dalla media)
         current_loss_from_last = (current_rate - last_order_price) / last_order_price
 
@@ -242,7 +328,7 @@ class RyLoSStrategy(IStrategy):
 
                 # Calcola stake totale della posizione (inclusi DCA)
                 total_stake = sum(order.cost for order in filled_entries if order.cost)
-                
+
                 # Controlli sicurezza per Emergency DCA (riduce stake se necessario)
                 current_position_value = total_stake * 4
                 emergency_position_value = emergency_stake * 4
@@ -300,20 +386,34 @@ class RyLoSStrategy(IStrategy):
             if next_stake < min_stake:
                 return None
 
-        # Controlla distanza minima dall'ultimo ordine fillato (solo in discesa)
-        if not filled_entries:
-            return None
-        last_order_rate = filled_entries[-1].average
-        price_distance = abs(current_rate - last_order_rate) / last_order_rate
-
-        # Calcola distanza DCA dinamica
-        dynamic_distance = self.get_dynamic_dca_distance(trade.pair, current_rate)
-
-        # DCA solo se: distanza sufficiente E prezzo più basso dell'ultimo ordine
-        if price_distance < dynamic_distance or current_rate >= last_order_rate:
+        # ===== DCA con trailing entry (passivbot threshold + retracement) =====
+        # DCA solo in discesa rispetto all'ultimo fill
+        if current_rate >= last_order_price:
             return None
 
-        return next_stake, f"dca_{entry_count + 1}_{current_profit*100:.1f}%"
+        # Minimo raggiunto dall'ultimo fill
+        window = self._candles_window(trade.pair, last_fill_time, current_time)
+        lowest_since_last = current_rate
+        if window is not None:
+            lowest_since_last = min(window["low"].min(), current_rate)
+
+        # Threshold: la discesa dal fill al minimo deve superare la distanza dinamica
+        drop_from_last = (last_order_price - lowest_since_last) / last_order_price
+        dynamic_distance = self.get_dynamic_dca_distance(
+            trade.pair, current_rate, exposure_ratio
+        )
+        if drop_from_last < dynamic_distance:
+            return None
+
+        # Retracement: serve un rimbalzo confermato dal minimo (compra sul rimbalzo,
+        # non al volo in discesa)
+        bounce_from_low = (
+            (current_rate - lowest_since_last) / lowest_since_last if lowest_since_last > 0 else 0
+        )
+        if bounce_from_low < self.dca_trailing_retracement_pct.value:
+            return None
+
+        return next_stake, f"dca_{entry_count + 1}_{current_profit * 100:.1f}%"
 
     def populate_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
         # RSI periodo 10 per maggiore reattività su 5min
@@ -339,6 +439,11 @@ class RyLoSStrategy(IStrategy):
         # Williams %R periodo 10
         dataframe["williams_r"] = ta.WILLR(
             dataframe["high"], dataframe["low"], dataframe["close"], timeperiod=10
+        )
+
+        # EMA di ancoraggio (passivbot ema_span): entry iniziale e unstuck
+        dataframe["ema_anchor"] = ta.EMA(
+            dataframe["close"], timeperiod=self.ema_span_candles.value
         )
 
         return dataframe
@@ -370,11 +475,18 @@ class RyLoSStrategy(IStrategy):
             rsi_oversold + bb_oversold + stochrsi_oversold + williams_oversold
         )
 
+        # Ancoraggio EMA (passivbot initial_ema_dist): entra solo sotto la banda
+        ema_condition = (
+            dataframe["close"] <= dataframe["ema_anchor"] * (1 + self.initial_ema_dist.value)
+        ).fillna(False)
+
         # Crea tag parlanti per indicare quali indicatori hanno scatenato l'entry
         dataframe["enter_tag"] = ""
 
-        entry_condition = (oversold_count >= self.min_oversold_count.value) & (
-            dataframe["close"] < dataframe["open"]
+        entry_condition = (
+            (oversold_count >= self.min_oversold_count.value)
+            & (dataframe["close"] < dataframe["open"])
+            & ema_condition
         )
 
         for i in range(len(dataframe)):
@@ -406,42 +518,29 @@ class RyLoSStrategy(IStrategy):
         current_profit: float,
         **kwargs,
     ):
-        total_balance = self.wallets.get_total_stake_amount()
-        max_open_trades = self.config.get("max_open_trades", 1)
-        max_orders = self.calculate_max_orders(total_balance)
-
-        # Auto-Reduce: logica Passivbot
-        if self.auto_reduce_enabled:
-            # Calcola exposure di QUESTO trade
+        # ===== Trailing close passivbot (threshold + retracement) =====
+        # max_since_open = massimo dall'ultimo cambio di posizione (ultimo fill);
+        # exit se ha superato avg_price*(1+threshold) e il prezzo ritraccia
+        # di retracement_pct dal massimo. Chiude solo in profitto.
+        if current_profit > 0:
             filled_entries = trade.select_filled_orders(trade.entry_side)
-            total_stake = sum(order.cost for order in filled_entries if order.cost)
-            position_exposure = total_stake * 4  # leverage 4x
-            
-            # Calcola limite per-pair
-            per_pair_limit = (total_balance * 4) / max_open_trades
-            exposure_ratio = position_exposure / per_pair_limit if per_pair_limit > 0 else 0
-            
-            # Trigger: se questo trade supera 101% del suo limite
-            if exposure_ratio > 1.01:
-                # Interpolazione lineare per calcolare ideal stake
-                stake_lowered = total_stake * 0.9
-                exposure_lowered = stake_lowered * 4
-                
-                target_exposure = per_pair_limit * 1.01
-                
-                # Interpolazione: ideal_stake = stake_lowered + (target - exposure_lowered) * (total_stake - stake_lowered) / (position_exposure - exposure_lowered)
-                if position_exposure != exposure_lowered:
-                    ideal_stake = stake_lowered + (target_exposure - exposure_lowered) * (total_stake - stake_lowered) / (position_exposure - exposure_lowered)
-                else:
-                    ideal_stake = total_stake
-                
-                # Calcola quanto ridurre
-                auto_reduce_stake = total_stake - ideal_stake
-                
-                if auto_reduce_stake > 0:
-                    return -auto_reduce_stake, f"sell_auto_reduce_{auto_reduce_stake:.2f}"
+            if filled_entries:
+                last_fill_time = filled_entries[-1].order_filled_date.replace(
+                    tzinfo=timezone.utc
+                )
+                window = self._candles_window(pair, last_fill_time, current_time)
+                if window is not None:
+                    max_since_open = max(window["high"].max(), current_rate)
+                    threshold_price = trade.open_rate * (
+                        1 + self.close_trailing_threshold_pct.value
+                    )
+                    retracement_price = max_since_open * (
+                        1 - self.close_trailing_retracement_pct.value
+                    )
+                    if max_since_open >= threshold_price and current_rate <= retracement_price:
+                        return f"sell_trailing_close_{current_profit * 100:.1f}%"
 
-        # Multi-Oscillator Exit
+        # ===== Multi-Oscillator Exit =====
         if current_profit > self.min_profit_for_overbought_exit.value:
             dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
             current_candle = dataframe.iloc[-1]
