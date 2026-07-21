@@ -115,6 +115,17 @@ class RyLoSStrategy(IStrategy):
     # evita il "moncherino" che resta aperto per settimane
     CLOSE_GRID_MAX_CLIPS = 2
 
+    # Profit-lock (rifinitura): realizza gli spike di equity non realizzata.
+    # Trigger sul profit ratio del trade (non sul markup prezzo), bypassa il
+    # cooldown ordini: su un pump verticale il close_grid (clip 49% ogni 2
+    # candele) non fa in tempo a scalare la posizione prima del ritraccio.
+    # Default OFF: i candidati del run 2026-07-21 restano identici.
+    profit_lock_enabled = CategoricalParameter(
+        [True, False], default=False, space="sell", optimize=True
+    )
+    profit_lock_threshold = DecimalParameter(0.05, 0.30, default=0.12, space="sell", optimize=True)
+    profit_lock_qty_pct = DecimalParameter(0.3, 1.0, default=0.6, space="sell", optimize=True)
+
     # Unstuck passivbot: riduzione parziale della posizione stuck
     unstuck_threshold = DecimalParameter(0.3, 0.7, default=0.445, space="sell", optimize=True)
     unstuck_close_pct = DecimalParameter(0.03, 0.10, default=0.051, space="sell", optimize=True)
@@ -142,6 +153,18 @@ class RyLoSStrategy(IStrategy):
     _fill_cache: dict = {}
     _last_unstuck: dict = {}
     _max_orders_cache: int | None = None
+
+    class HyperOpt:
+        # Guard-stoploss (rifinitura): banda -0.9..-0.4 sullo stake (leva 4x:
+        # prezzo -22.5%..-10% sotto la media). I trade che recuperano non
+        # passano mai di li'; i death-spiral si' -> taglia le liquidazioni
+        # (stop_loss a stake -100%) riducendo il danno. Attivo solo con
+        # --spaces ... stoploss; il default resta -1.
+        @staticmethod
+        def stoploss_space():
+            from freqtrade.optimize.space import SKDecimal
+
+            return [SKDecimal(-0.9, -0.4, decimals=3, name="stoploss")]
 
     def leverage(
         self,
@@ -331,6 +354,18 @@ class RyLoSStrategy(IStrategy):
         if fill_info is None:
             return None
         n_entries, last_fill_time, last_order_price = fill_info
+
+        # ===== PROFIT-LOCK: realizza gli spike di profit non realizzato =====
+        # Prima del cooldown: sul pump deve scattare a ogni candela
+        if (
+            self.profit_lock_enabled.value
+            and current_profit >= self.profit_lock_threshold.value
+        ):
+            reduce_stake = trade.stake_amount * self.profit_lock_qty_pct.value
+            remaining = trade.stake_amount - reduce_stake
+            if min_stake and remaining < min_stake * 2:
+                reduce_stake = trade.stake_amount
+            return -reduce_stake, f"profit_lock_{current_profit * 100:.1f}%"
 
         # Cooldown dinamico: aspetta N candele dall'ultimo ordine
         cooldown_minutes = timeframe_to_minutes(self.timeframe) * self.dca_cooldown_candles.value
