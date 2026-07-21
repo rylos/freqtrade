@@ -55,6 +55,12 @@ class SortinoRyLoSHyperOptLoss(IHyperOptLoss):
     ) -> float:
         sortino = SortinoRyLoSHyperOptLoss._daily_sortino(results, min_date, max_date)
 
+        # Tie-breaker: molte config DCA saturano il cap Sortino (win rate ~99%);
+        # un bonus logaritmico sul profitto totale discrimina dentro il cap
+        # restando piccolo rispetto alla scala del Sortino.
+        total_profit_ratio = results["profit_abs"].sum() / starting_balance
+        profit_bonus = math.log1p(max(0.0, total_profit_ratio))
+
         # Guardrail 1: max relative drawdown on the realized equity curve
         try:
             drawdown = calculate_max_drawdown(
@@ -69,7 +75,7 @@ class SortinoRyLoSHyperOptLoss(IHyperOptLoss):
         max_held_days = results["trade_duration"].max() / (60 * 24)
         held_penalty = max(0.0, max_held_days - MAX_POSITION_HELD_DAYS) * HELD_DAYS_PENALTY_SCALE
 
-        return -(sortino - dd_penalty - held_penalty)
+        return -(sortino + profit_bonus - dd_penalty - held_penalty)
 
     @staticmethod
     def _daily_sortino(results: DataFrame, min_date: datetime, max_date: datetime) -> float:
