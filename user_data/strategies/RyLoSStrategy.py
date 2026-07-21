@@ -20,6 +20,7 @@ class RyLoSStrategy(IStrategy):
     timeframe = "5m"
     can_short = False
     process_only_new_candles = True
+    startup_candle_count = 100  # warmup per EMA(68) e BB(20)
     position_adjustment_enable = True
     # max_entry_position_adjustment rimosso - calcolato dinamicamente
     stoploss = -1  # Disabilitato, gestito da custom_exit + unstuck
@@ -146,10 +147,14 @@ class RyLoSStrategy(IStrategy):
         dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
         if dataframe.empty:
             return None
-        window = dataframe.loc[
-            (dataframe["date"] > start_time) & (dataframe["date"] <= current_time)
-        ]
-        return window if not window.empty else None
+        # searchsorted (O(log n)) invece di maschere booleane (O(n)):
+        # questa funzione viene chiamata a ogni candela durante il backtest
+        dates = dataframe["date"]
+        start_idx = dates.searchsorted(start_time, side="right")
+        end_idx = dates.searchsorted(current_time, side="right")
+        if start_idx >= end_idx:
+            return None
+        return dataframe.iloc[start_idx:end_idx]
 
     def custom_stake_amount(
         self,
@@ -489,19 +494,19 @@ class RyLoSStrategy(IStrategy):
             & ema_condition
         )
 
-        for i in range(len(dataframe)):
-            if entry_condition.iloc[i]:
-                indicators = []
-                if rsi_oversold.iloc[i]:
-                    indicators.append("rsi")
-                if bb_oversold.iloc[i]:
-                    indicators.append("bb")
-                if stochrsi_oversold.iloc[i]:
-                    indicators.append("stochrsi")
-                if williams_oversold.iloc[i]:
-                    indicators.append("wr")
+        # Itera solo le candele di entry (non tutto il dataframe)
+        for idx in dataframe.index[entry_condition]:
+            indicators = []
+            if rsi_oversold.loc[idx]:
+                indicators.append("rsi")
+            if bb_oversold.loc[idx]:
+                indicators.append("bb")
+            if stochrsi_oversold.loc[idx]:
+                indicators.append("stochrsi")
+            if williams_oversold.loc[idx]:
+                indicators.append("wr")
 
-                dataframe.loc[dataframe.index[i], "enter_tag"] = f"buy_({'+'.join(indicators)})"
+            dataframe.loc[idx, "enter_tag"] = f"buy_({'+'.join(indicators)})"
 
         dataframe.loc[entry_condition, "enter_long"] = 1
         return dataframe
