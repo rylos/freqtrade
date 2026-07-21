@@ -70,16 +70,10 @@ class RyLoSStrategy(IStrategy):
     # DCA cooldown dinamico (numero di candele da aspettare)
     dca_cooldown_candles = IntParameter(1, 5, default=2, space="buy", optimize=False)
 
-    # Parametri entry ottimizzabili - Multi-Oscillator Oversold
-    rsi_oversold_threshold = DecimalParameter(25, 40, default=25.333, space="buy", optimize=True)
-    bb_oversold_threshold = DecimalParameter(0.1, 0.3, default=0.294, space="buy", optimize=True)
-    stochrsi_oversold_threshold = DecimalParameter(
-        0, 30, default=0.782, space="buy", optimize=True
-    )
-    williams_oversold_threshold = DecimalParameter(
-        -90, -70, default=-74.991, space="buy", optimize=True
-    )
-    min_oversold_count = IntParameter(2, 4, default=2, space="buy", optimize=True)
+    # Entry: oscillatore 4RSI di RyLoS (istogramma continuo hyperoptabile
+    # al posto del conteggio discreto: avg(RSI2, RSI7, RSI14) - 50)
+    osc_entry_threshold = DecimalParameter(-40, -10, default=-25, space="buy", optimize=True)
+    entry_stoch_os = DecimalParameter(10, 40, default=20, space="buy", optimize=True)
 
     # Emergency DCA (prima della liquidazione)
     emergency_dca_threshold = DecimalParameter(
@@ -89,19 +83,9 @@ class RyLoSStrategy(IStrategy):
         1.05, 2.0, default=1.175, space="buy", optimize=True
     )
 
-    # Parametri per exit ottimizzabili - Multi-Oscillator Overbought
-    rsi_overbought_threshold = DecimalParameter(60, 85, default=63.146, space="sell", optimize=True)
-    bb_overbought_threshold = DecimalParameter(0.7, 0.9, default=0.871, space="sell", optimize=True)
-    atr_overbought_multiplier = DecimalParameter(
-        0.5, 2.0, default=0.556, space="sell", optimize=True
-    )
-    stochrsi_overbought_threshold = DecimalParameter(
-        70, 100, default=94.809, space="sell", optimize=True
-    )
-    williams_overbought_threshold = DecimalParameter(
-        -30, -10, default=-24.965, space="sell", optimize=True
-    )
-    min_overbought_count = IntParameter(2, 5, default=4, space="sell", optimize=True)
+    # Exit: oscillatore 4RSI lato overbought (continuo)
+    osc_exit_threshold = DecimalParameter(10, 40, default=25, space="sell", optimize=True)
+    exit_stoch_ob = DecimalParameter(60, 90, default=80, space="sell", optimize=True)
     min_profit_for_overbought_exit = DecimalParameter(
         0.01, 0.10, default=0.017, space="sell", optimize=True
     )
@@ -540,28 +524,21 @@ class RyLoSStrategy(IStrategy):
         return next_stake, f"dca_{entry_count + 1}_{current_profit * 100:.1f}%"
 
     def populate_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
-        # RSI periodo 10 per maggiore reattività su 5min
-        dataframe["rsi"] = ta.RSI(dataframe["close"], timeperiod=10)
+        # Oscillatore 4RSI di RyLoS: avg(RSI2, RSI7, RSI14) - 50
+        rsi_fast = ta.RSI(dataframe["close"], timeperiod=2)
+        rsi_mid = ta.RSI(dataframe["close"], timeperiod=7)
+        rsi_slow = ta.RSI(dataframe["close"], timeperiod=14)
+        dataframe["osc_4rsi"] = (rsi_fast + rsi_mid + rsi_slow) / 3 - 50
 
-        # Stochastic RSI periodo 10 (configurazione 10-5-3)
-        stochrsi_k, stochrsi_d = ta.STOCHRSI(
-            dataframe["close"], timeperiod=10, fastk_period=5, fastd_period=3
+        # Filtro stocastico del 4RSI: %K = SMA(stoch(14), 3) (= fastd di STOCHF)
+        stoch_fastk, stoch_fastd = ta.STOCHF(
+            dataframe["high"], dataframe["low"], dataframe["close"],
+            fastk_period=14, fastd_period=3, fastd_matype=0,
         )
-        dataframe["stochrsi"] = stochrsi_k  # Usa %K (più reattivo)
-
-        # Bollinger Bands %B (20 periodi standard)
-        bb_upper, bb_middle, bb_lower = ta.BBANDS(
-            dataframe["close"], timeperiod=20, nbdevup=2.0, nbdevdn=2.0
-        )
-        dataframe["bb_percent"] = (dataframe["close"] - bb_lower) / (bb_upper - bb_lower)
+        dataframe["stoch_k"] = stoch_fastd
 
         # ATR periodo 10 per volatilità più reattiva
         dataframe["atr"] = ta.ATR(
-            dataframe["high"], dataframe["low"], dataframe["close"], timeperiod=10
-        )
-
-        # Williams %R periodo 10
-        dataframe["williams_r"] = ta.WILLR(
             dataframe["high"], dataframe["low"], dataframe["close"], timeperiod=10
         )
 
@@ -577,59 +554,25 @@ class RyLoSStrategy(IStrategy):
         # i valori restano comunque validi tra epoch)
         self._extremes_cache.clear()
 
-        # Multi-Oscillator Oversold: conta quanti indicatori sono in oversold (4 attivi)
-        rsi_oversold = (
-            (dataframe["rsi"] < self.rsi_oversold_threshold.value).fillna(False).astype(int)
-        )
-        bb_oversold = (
-            (dataframe["bb_percent"] < self.bb_oversold_threshold.value).fillna(False).astype(int)
-        )
-
-        # Stochastic RSI oversold: timing preciso
-        stochrsi_oversold = (
-            (dataframe["stochrsi"] < self.stochrsi_oversold_threshold.value)
-            .fillna(False)
-            .astype(int)
-        )
-
-        # Williams %R oversold
-        williams_oversold = (
-            (dataframe["williams_r"] < self.williams_oversold_threshold.value)
-            .fillna(False)
-            .astype(int)
-        )
-
-        oversold_count = (
-            rsi_oversold + bb_oversold + stochrsi_oversold + williams_oversold
-        )
+        # 4RSI oversold: istogramma sotto soglia + filtro stocastico
+        osc_condition = (dataframe["osc_4rsi"] < self.osc_entry_threshold.value).fillna(False)
+        stoch_condition = (dataframe["stoch_k"] < self.entry_stoch_os.value).fillna(False)
 
         # Ancoraggio EMA (passivbot initial_ema_dist): entra solo sotto la banda
         ema_condition = (
             dataframe["close"] <= dataframe["ema_anchor"] * (1 + self.initial_ema_dist.value)
         ).fillna(False)
 
-        # Crea tag parlanti per indicare quali indicatori hanno scatenato l'entry
-        dataframe["enter_tag"] = ""
-
         entry_condition = (
-            (oversold_count >= self.min_oversold_count.value)
+            osc_condition
+            & stoch_condition
             & (dataframe["close"] < dataframe["open"])
             & ema_condition
         )
 
-        # Itera solo le candele di entry (non tutto il dataframe)
+        dataframe["enter_tag"] = ""
         for idx in dataframe.index[entry_condition]:
-            indicators = []
-            if rsi_oversold.loc[idx]:
-                indicators.append("rsi")
-            if bb_oversold.loc[idx]:
-                indicators.append("bb")
-            if stochrsi_oversold.loc[idx]:
-                indicators.append("stochrsi")
-            if williams_oversold.loc[idx]:
-                indicators.append("wr")
-
-            dataframe.loc[idx, "enter_tag"] = f"buy_({'+'.join(indicators)})"
+            dataframe.loc[idx, "enter_tag"] = f"buy_4rsi_{dataframe.at[idx, 'osc_4rsi']:.0f}"
 
         dataframe.loc[entry_condition, "enter_long"] = 1
         return dataframe
@@ -668,33 +611,18 @@ class RyLoSStrategy(IStrategy):
                     if max_since_open >= threshold_price and current_rate <= retracement_price:
                         return f"sell_trailing_close_{current_profit * 100:.1f}%"
 
-        # ===== Multi-Oscillator Exit =====
+        # ===== 4RSI Overbought Exit (istogramma continuo) =====
         if current_profit > self.min_profit_for_overbought_exit.value:
             dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
-            current_candle = dataframe.iloc[-1]
-
-            # Controlla quali indicatori sono overbought
-            indicators = []
-            if current_candle["rsi"] > self.rsi_overbought_threshold.value:
-                indicators.append("rsi")
-            if current_candle["bb_percent"] > self.bb_overbought_threshold.value:
-                indicators.append("bb")
-            if current_candle["close"] > (
-                current_candle["high"]
-                - current_candle["atr"] * self.atr_overbought_multiplier.value
-            ):
-                indicators.append("atr")
-            if current_candle["stochrsi"] > self.stochrsi_overbought_threshold.value:
-                indicators.append("stochrsi")
-            if current_candle["williams_r"] > self.williams_overbought_threshold.value:
-                indicators.append("wr")
-
-            overbought_count = len(indicators)
-
-            if (
-                overbought_count >= self.min_overbought_count.value
-                and current_candle["close"] > current_candle["open"]
-            ):
-                return f"sell_overbought_({'+'.join(indicators)})"
+            if len(dataframe) > 0:
+                osc = dataframe["osc_4rsi"].iat[-1]
+                stoch_k = dataframe["stoch_k"].iat[-1]
+                candle_green = dataframe["close"].iat[-1] > dataframe["open"].iat[-1]
+                if (
+                    osc > self.osc_exit_threshold.value
+                    and stoch_k > self.exit_stoch_ob.value
+                    and candle_green
+                ):
+                    return f"sell_4rsi_{osc:.0f}_{current_profit * 100:.1f}%"
 
         return None
