@@ -51,6 +51,11 @@ DD_MEAN_1PCT_SCALE = 10.0
 RECOVERY_LOG_SCALE = 0.3
 MAX_RECOVERY_DAYS = 30.0
 RECOVERY_GUARDRAIL_SCALE = 0.1
+# Cap alle penalità recovery/held: puniscono (piu' di qualsiasi singolo
+# premio) ma non possono dominare la ricerca annegando l'asse crescita
+# (audit 2026-07-21: p_rec medio 18.5 vs premi ~1)
+RECOVERY_PENALTY_CAP = 8.0
+HELD_PENALTY_CAP = 8.0
 # Anti-bag
 MAX_POSITION_HELD_DAYS = 20.0
 HELD_DAYS_PENALTY_SCALE = 0.6
@@ -126,6 +131,7 @@ class SortinoRyLoSHyperOptLoss(IHyperOptLoss):
         recovery_penalty += (
             max(0.0, recovery_days_max - MAX_RECOVERY_DAYS) * RECOVERY_GUARDRAIL_SCALE
         )
+        recovery_penalty = min(recovery_penalty, RECOVERY_PENALTY_CAP)
 
         # passivbot: position_held_days_max (min) — continua + guardrail >20gg
         max_held_days = results["trade_duration"].max() / (60 * 24)
@@ -133,6 +139,7 @@ class SortinoRyLoSHyperOptLoss(IHyperOptLoss):
         held_penalty += (
             max(0.0, max_held_days - MAX_POSITION_HELD_DAYS) * HELD_DAYS_GUARDRAIL_SCALE
         )
+        held_penalty = min(held_penalty, HELD_PENALTY_CAP)
 
         # Penalità durata media oltre 5h (scalping)
         avg_duration_hours = results["trade_duration"].mean() / 60

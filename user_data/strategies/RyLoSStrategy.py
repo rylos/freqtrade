@@ -2,7 +2,14 @@ import talib.abstract as ta
 from pandas import DataFrame
 from datetime import datetime, timedelta, timezone
 
-from freqtrade.strategy import DecimalParameter, IntParameter, IStrategy, Trade, timeframe_to_minutes
+from freqtrade.strategy import (
+    CategoricalParameter,
+    DecimalParameter,
+    IntParameter,
+    IStrategy,
+    Trade,
+    timeframe_to_minutes,
+)
 
 
 class RyLoSStrategy(IStrategy):
@@ -113,10 +120,16 @@ class RyLoSStrategy(IStrategy):
     # qty_pct 0.49): realizza profitto a clip parziali appena il prezzo
     # supera il markup dal prezzo medio — è il meccanismo che tiene corte
     # le durate (position_held_days_max ~7gg nel BT dd39)
+    close_grid_enabled = CategoricalParameter(
+        [True, False], default=True, space="sell", optimize=True
+    )
     close_grid_markup_pct = DecimalParameter(
         0.002, 0.010, default=0.006, space="sell", optimize=True
     )
     close_grid_qty_pct = DecimalParameter(0.2, 0.6, default=0.49, space="sell", optimize=True)
+    # Dopo questo numero di clip, il trigger successivo chiude tutto:
+    # evita il "moncherino" che resta aperto per settimane
+    CLOSE_GRID_MAX_CLIPS = 2
 
     # Unstuck passivbot: riduzione parziale della posizione stuck
     unstuck_threshold = DecimalParameter(0.3, 0.7, default=0.445, space="sell", optimize=True)
@@ -341,13 +354,16 @@ class RyLoSStrategy(IStrategy):
         # ===== CLOSE GRID (passivbot): take-profit a clip parziali =====
         # Prezzo sopra avg_entry * (1 + markup) -> vendi una clip; il resto
         # lo gestiscono trailing close / oscillatori / clip successive
-        if current_profit > 0:
+        if self.close_grid_enabled.value and current_profit > 0:
             price_markup = (current_rate - trade.open_rate) / trade.open_rate
             if price_markup >= self.close_grid_markup_pct.value:
+                n_exits = trade.nr_of_successful_exits
                 reduce_stake = trade.stake_amount * self.close_grid_qty_pct.value
                 remaining = trade.stake_amount - reduce_stake
-                if min_stake and remaining < min_stake * 2:
-                    # resto troppo piccolo: chiudi tutto
+                if n_exits >= self.CLOSE_GRID_MAX_CLIPS or (
+                    min_stake and remaining < min_stake * 2
+                ):
+                    # basta clip: chiudi tutta la posizione residua
                     reduce_stake = trade.stake_amount
                 return (
                     -reduce_stake,
