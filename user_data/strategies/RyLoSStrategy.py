@@ -196,10 +196,13 @@ class RyLoSStrategy(IStrategy):
         if dataframe.empty:
             return None
         dates = dataframe["date"]
-        # Timestamp pandas: i datetime Python live (precisione us) fanno
-        # esplodere searchsorted su datetime64[ns] ("Cannot losslessly convert")
-        start_idx = int(dates.searchsorted(Timestamp(anchor_time), side="right"))
-        end_idx = int(dates.searchsorted(Timestamp(current_time), side="right"))
+        # In live le candele hanno dtype datetime64 a precisione ms mentre gli
+        # ordini hanno i microsecondi: searchsorted rifiuta la conversione
+        # lossy ("Cannot losslessly convert units") -> allinea l'unita' con
+        # arrotondamento esplicito
+        unit = getattr(dates.dtype, "unit", "ns")
+        start_idx = int(dates.searchsorted(Timestamp(anchor_time).as_unit(unit), side="right"))
+        end_idx = int(dates.searchsorted(Timestamp(current_time).as_unit(unit), side="right"))
         if start_idx >= end_idx:
             return None
 
