@@ -37,6 +37,15 @@ MAX_RELATIVE_DRAWDOWN = 0.45
 MAX_POSITION_HELD_DAYS = 20.0
 DRAWDOWN_PENALTY_SCALE = 40.0
 HELD_DAYS_GUARDRAIL_SCALE = 0.2
+# Continuous drawdown axes (eq8 keeps BOTH as objectives — wiki lesson
+# 2026-06-30: dropping one lets the optimizer park candidates at the cap):
+# drawdown_worst (max) and drawdown_worst_mean_1pct (mean of worst 1% of
+# daily drawdowns, robust to a single spike).
+DD_WORST_CONTINUOUS_SCALE = 5.0
+DD_MEAN_1PCT_SCALE = 8.0
+# passivbot dd39 limit: strategy_eq_recovery_days_max > 12
+MAX_RECOVERY_DAYS = 12.0
+RECOVERY_GUARDRAIL_SCALE = 0.2
 # Continuous risk axes (passivbot scoring: recovery_days_max, held_days_max)
 RECOVERY_DAYS_PENALTY_SCALE = 0.6
 HELD_DAYS_PENALTY_SCALE = 0.6
@@ -69,8 +78,10 @@ class SortinoRyLoSHyperOptLoss(IHyperOptLoss):
         starting_balance: float,
         **kwargs,
     ) -> float:
-        sortino, recovery_days_max, adg_w, mdg_w = SortinoRyLoSHyperOptLoss._daily_metrics(
-            results, min_date, max_date
+        sortino, recovery_days_max, adg_w, mdg_w, dd_mean_1pct = (
+            SortinoRyLoSHyperOptLoss._daily_metrics(
+                results, min_date, max_date, starting_balance
+            )
         )
 
         # Crescita (tie-breaker dentro il cap Sortino), recency-weighted:
@@ -93,9 +104,17 @@ class SortinoRyLoSHyperOptLoss(IHyperOptLoss):
         except ValueError:
             max_dd = 0.0
         dd_penalty = max(0.0, max_dd - MAX_RELATIVE_DRAWDOWN) * DRAWDOWN_PENALTY_SCALE
+        # Assi continui: max dd sempre penalizzato (non solo oltre il cap)
+        # + media del peggior 1% dei drawdown giornalieri
+        dd_penalty += max_dd * DD_WORST_CONTINUOUS_SCALE
+        dd_penalty += dd_mean_1pct * DD_MEAN_1PCT_SCALE
 
-        # passivbot: strategy_eq_recovery_days_max (min) — tempo sott'acqua
+        # passivbot: strategy_eq_recovery_days_max (min) — tempo sott'acqua,
+        # continua + guardrail oltre 12 giorni (limit del config dd39)
         recovery_penalty = math.log1p(recovery_days_max) * RECOVERY_DAYS_PENALTY_SCALE
+        recovery_penalty += (
+            max(0.0, recovery_days_max - MAX_RECOVERY_DAYS) * RECOVERY_GUARDRAIL_SCALE
+        )
 
         # passivbot: position_held_days_max (min) — continua + guardrail >20gg
         max_held_days = results["trade_duration"].max() / (60 * 24)
@@ -116,9 +135,9 @@ class SortinoRyLoSHyperOptLoss(IHyperOptLoss):
 
     @staticmethod
     def _daily_metrics(
-        results: DataFrame, min_date: datetime, max_date: datetime
-    ) -> tuple[float, float, float, float]:
-        """(sortino cappato, recovery_days_max, adg_w, mdg_w) su base giornaliera"""
+        results: DataFrame, min_date: datetime, max_date: datetime, starting_balance: float
+    ) -> tuple[float, float, float, float, float]:
+        """(sortino cappato, recovery_days_max, adg_w, mdg_w, dd_mean_1pct) giornalieri"""
         resample_freq = "1D"
         slippage_per_trade_ratio = 0.0005
         days_in_year = 365
@@ -137,12 +156,19 @@ class SortinoRyLoSHyperOptLoss(IHyperOptLoss):
         )
 
         # recovery_days_max: streak massimo di giorni consecutivi sotto il picco
-        equity = sum_daily["profit_abs"].cumsum()
-        underwater = equity < equity.cummax()
+        equity = starting_balance + sum_daily["profit_abs"].cumsum()
+        peak = equity.cummax()
+        underwater = equity < peak
         groups = (~underwater).cumsum()
         recovery_days_max = (
             float(underwater.groupby(groups).sum().max()) if underwater.any() else 0.0
         )
+
+        # dd_mean_1pct (passivbot drawdown_worst_mean_1pct): media del peggior
+        # 1% dei drawdown giornalieri relativi — coda mediata, robusta a spike
+        daily_dd = ((peak - equity) / peak).clip(lower=0.0)
+        n_worst = max(1, int(len(daily_dd) * 0.01))
+        dd_mean_1pct = float(daily_dd.nlargest(n_worst).mean())
 
         total_profit = sum_daily["profit_ratio_after_slippage"] - minimum_acceptable_return
         expected_returns_mean = total_profit.mean()
@@ -170,4 +196,4 @@ class SortinoRyLoSHyperOptLoss(IHyperOptLoss):
             sortino = min(
                 expected_returns_mean / down_stdev * math.sqrt(days_in_year), SORTINO_CAP
             )
-        return sortino, recovery_days_max, adg_w, mdg_w
+        return sortino, recovery_days_max, adg_w, mdg_w, dd_mean_1pct
