@@ -44,7 +44,7 @@ class RyLoSStrategy(IStrategy):
     total_wallet_exposure_limit = DecimalParameter(
         2.0, 3.0, default=3.0, space="buy", optimize=True
     )
-    first_order_pct = DecimalParameter(0.005, 0.03, default=0.029, space="buy", optimize=True)
+    first_order_pct = DecimalParameter(0.01, 0.10, default=0.05, space="buy", optimize=True)
     dca_distance = DecimalParameter(0.005, 0.035, default=0.022, space="buy", optimize=True)
     dca_multiplier = DecimalParameter(1.2, 3.0, default=1.991, space="buy", optimize=True)
 
