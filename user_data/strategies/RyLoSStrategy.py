@@ -109,6 +109,15 @@ class RyLoSStrategy(IStrategy):
         0.001, 0.01, default=0.0016, space="sell", optimize=True
     )
 
+    # Close grid passivbot (dd39: markup_start 0.617% / end 0.261%,
+    # qty_pct 0.49): realizza profitto a clip parziali appena il prezzo
+    # supera il markup dal prezzo medio — è il meccanismo che tiene corte
+    # le durate (position_held_days_max ~7gg nel BT dd39)
+    close_grid_markup_pct = DecimalParameter(
+        0.002, 0.010, default=0.006, space="sell", optimize=True
+    )
+    close_grid_qty_pct = DecimalParameter(0.2, 0.6, default=0.49, space="sell", optimize=True)
+
     # Unstuck passivbot: riduzione parziale della posizione stuck
     unstuck_threshold = DecimalParameter(0.3, 0.7, default=0.445, space="sell", optimize=True)
     unstuck_close_pct = DecimalParameter(0.03, 0.10, default=0.051, space="sell", optimize=True)
@@ -328,6 +337,22 @@ class RyLoSStrategy(IStrategy):
 
         max_open_trades = self.config.get("max_open_trades", 1)
         total_balance = None  # calcolato solo quando serve (wallets è costoso)
+
+        # ===== CLOSE GRID (passivbot): take-profit a clip parziali =====
+        # Prezzo sopra avg_entry * (1 + markup) -> vendi una clip; il resto
+        # lo gestiscono trailing close / oscillatori / clip successive
+        if current_profit > 0:
+            price_markup = (current_rate - trade.open_rate) / trade.open_rate
+            if price_markup >= self.close_grid_markup_pct.value:
+                reduce_stake = trade.stake_amount * self.close_grid_qty_pct.value
+                remaining = trade.stake_amount - reduce_stake
+                if min_stake and remaining < min_stake * 2:
+                    # resto troppo piccolo: chiudi tutto
+                    reduce_stake = trade.stake_amount
+                return (
+                    -reduce_stake,
+                    f"tp_grid_{price_markup * 100:.2f}%",
+                )
 
         # ===== UNSTUCK (passivbot): riduzione parziale della posizione stuck =====
         if current_profit < 0:
