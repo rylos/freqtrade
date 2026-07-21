@@ -35,12 +35,15 @@ from freqtrade.optimize.hyperopt import IHyperOptLoss
 SORTINO_CAP = 15.0
 SORTINO_WEIGHT = 0.5
 PROFIT_SCALE = 4.0
-# Drawdown: gratis fino al 30% (accettato dall'utente; passivbot dd39
-# fa ~100x con dd 39%), penalità morbida 30-45%, muro oltre 45%.
+# Drawdown: gratis fino al 30% (accettato), morbido 30-40%, SQUALIFICA
+# oltre 40% — "un dd max oltre 40% non lo selezionero' mai, anche se ha
+# valori ottimi": penalità flat 50 punti (> di qualsiasi score raggiungibile,
+# che al massimo vale ~28) + rampa, così nessun profitto può comprarla.
 DD_FREE_THRESHOLD = 0.30
 DD_SOFT_SCALE = 20.0
-MAX_RELATIVE_DRAWDOWN = 0.45
-DRAWDOWN_PENALTY_SCALE = 40.0
+MAX_RELATIVE_DRAWDOWN = 0.40
+DD_DISQUALIFY_FLAT = 50.0
+DD_DISQUALIFY_RAMP = 200.0
 DD_1PCT_FREE_THRESHOLD = 0.20
 DD_MEAN_1PCT_SCALE = 10.0
 # Recovery (equity REALIZZATA: si muove a gradini di trade chiusi, quindi
@@ -111,9 +114,10 @@ class SortinoRyLoSHyperOptLoss(IHyperOptLoss):
             max_dd = drawdown.relative_account_drawdown
         except ValueError:
             max_dd = 0.0
-        # Gratis fino al 30%, morbida 30-45%, muro oltre 45%
+        # Gratis fino al 30%, morbida 30-40%, squalifica oltre 40%
         dd_penalty = max(0.0, max_dd - DD_FREE_THRESHOLD) * DD_SOFT_SCALE
-        dd_penalty += max(0.0, max_dd - MAX_RELATIVE_DRAWDOWN) * DRAWDOWN_PENALTY_SCALE
+        if max_dd > MAX_RELATIVE_DRAWDOWN:
+            dd_penalty += DD_DISQUALIFY_FLAT + (max_dd - MAX_RELATIVE_DRAWDOWN) * DD_DISQUALIFY_RAMP
         dd_penalty += max(0.0, dd_mean_1pct - DD_1PCT_FREE_THRESHOLD) * DD_MEAN_1PCT_SCALE
 
         # passivbot: strategy_eq_recovery_days_max (min) — tempo sott'acqua
