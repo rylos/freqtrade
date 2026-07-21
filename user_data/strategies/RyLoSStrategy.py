@@ -1,5 +1,5 @@
 import talib.abstract as ta
-from pandas import DataFrame
+from pandas import DataFrame, Timestamp
 from datetime import datetime, timedelta, timezone
 
 from freqtrade.strategy import (
@@ -196,8 +196,10 @@ class RyLoSStrategy(IStrategy):
         if dataframe.empty:
             return None
         dates = dataframe["date"]
-        start_idx = int(dates.searchsorted(anchor_time, side="right"))
-        end_idx = int(dates.searchsorted(current_time, side="right"))
+        # Timestamp pandas: i datetime Python live (precisione us) fanno
+        # esplodere searchsorted su datetime64[ns] ("Cannot losslessly convert")
+        start_idx = int(dates.searchsorted(Timestamp(anchor_time), side="right"))
+        end_idx = int(dates.searchsorted(Timestamp(current_time), side="right"))
         if start_idx >= end_idx:
             return None
 
