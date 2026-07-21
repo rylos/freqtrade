@@ -42,6 +42,12 @@ RECOVERY_DAYS_PENALTY_SCALE = 0.6
 HELD_DAYS_PENALTY_SCALE = 0.6
 # Scalping bias: reward trade frequency (log of trades/day)
 TRADE_FREQUENCY_REWARD_SCALE = 1.0
+# Growth axes (passivbot adg_w / mdg_w): recency-weighted mean and median
+# daily gain over 10 trailing slices (full, last 1/2, ... last 1/10).
+# mdg is the anti-staircase axis: a flat-then-jump equity has high mean but
+# ~zero median, and none of the other terms catches it.
+N_TRAILING_SLICES = 10
+MDG_REWARD_SCALE = 1.0
 
 
 class SortinoRyLoSHyperOptLoss(IHyperOptLoss):
@@ -63,13 +69,14 @@ class SortinoRyLoSHyperOptLoss(IHyperOptLoss):
         starting_balance: float,
         **kwargs,
     ) -> float:
-        sortino, recovery_days_max = SortinoRyLoSHyperOptLoss._daily_metrics(
+        sortino, recovery_days_max, adg_w, mdg_w = SortinoRyLoSHyperOptLoss._daily_metrics(
             results, min_date, max_date
         )
 
-        # Tie-breaker dentro il cap Sortino (win rate ~99% -> molte config al cap)
-        total_profit_ratio = results["profit_abs"].sum() / starting_balance
-        profit_bonus = math.log1p(max(0.0, total_profit_ratio))
+        # Crescita (tie-breaker dentro il cap Sortino), recency-weighted:
+        # adg_w = media giornaliera, mdg_w = mediana giornaliera (anti-gradino)
+        profit_bonus = math.log1p(max(0.0, adg_w * 365))
+        mdg_bonus = math.log1p(max(0.0, mdg_w * 365)) * MDG_REWARD_SCALE
 
         # Scalping bias: più trade al giorno
         backtest_days = max((max_date - min_date).total_seconds() / 86400, 1.0)
@@ -100,6 +107,7 @@ class SortinoRyLoSHyperOptLoss(IHyperOptLoss):
         return -(
             sortino
             + profit_bonus
+            + mdg_bonus
             + frequency_reward
             - dd_penalty
             - recovery_penalty
@@ -109,8 +117,8 @@ class SortinoRyLoSHyperOptLoss(IHyperOptLoss):
     @staticmethod
     def _daily_metrics(
         results: DataFrame, min_date: datetime, max_date: datetime
-    ) -> tuple[float, float]:
-        """(sortino annualizzato cappato, recovery_days_max dell'equity realizzata)"""
+    ) -> tuple[float, float, float, float]:
+        """(sortino cappato, recovery_days_max, adg_w, mdg_w) su base giornaliera"""
         resample_freq = "1D"
         slippage_per_trade_ratio = 0.0005
         days_in_year = 365
@@ -139,6 +147,18 @@ class SortinoRyLoSHyperOptLoss(IHyperOptLoss):
         total_profit = sum_daily["profit_ratio_after_slippage"] - minimum_acceptable_return
         expected_returns_mean = total_profit.mean()
 
+        # adg_w / mdg_w (passivbot): media/mediana giornaliera su 10 slice
+        # trailing (intero periodo, ultima 1/2, 1/3, ... 1/10) → pesa il recente
+        n_days = len(total_profit)
+        adg_slices = []
+        mdg_slices = []
+        for k in range(1, N_TRAILING_SLICES + 1):
+            tail = total_profit.iloc[n_days - max(1, n_days // k):]
+            adg_slices.append(tail.mean())
+            mdg_slices.append(tail.median())
+        adg_w = sum(adg_slices) / len(adg_slices)
+        mdg_w = sum(mdg_slices) / len(mdg_slices)
+
         downside = total_profit.copy()
         downside[downside > 0] = 0.0
         down_stdev = math.sqrt((downside**2).sum() / len(downside))
@@ -150,4 +170,4 @@ class SortinoRyLoSHyperOptLoss(IHyperOptLoss):
             sortino = min(
                 expected_returns_mean / down_stdev * math.sqrt(days_in_year), SORTINO_CAP
             )
-        return sortino, recovery_days_max
+        return sortino, recovery_days_max, adg_w, mdg_w
