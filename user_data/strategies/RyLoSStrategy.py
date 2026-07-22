@@ -126,6 +126,18 @@ class RyLoSStrategy(IStrategy):
     profit_lock_threshold = DecimalParameter(0.05, 0.30, default=0.156, space="sell", optimize=True)
     profit_lock_qty_pct = DecimalParameter(0.3, 1.0, default=0.97, space="sell", optimize=True)
 
+    # Pump-mode ER (Kaufman Efficiency Ratio): |close-close[N]| / somma |diff|,
+    # 0 = laterale, 1 = trend puro. Quando il trend è efficiente (ER sopra
+    # soglia) l'exit 4RSI overbought si disattiva e resta solo il trailing
+    # close → lascia correre i vincenti nei pump invece di uscire a +3/5%.
+    # Solo lato exit: le entry non cambiano mai. Default OFF: il candidato
+    # 5371 resta identico.
+    er_exit_enabled = CategoricalParameter(
+        [True, False], default=False, space="sell", optimize=True
+    )
+    er_period = IntParameter(20, 100, default=48, space="sell", optimize=True)
+    er_trend_threshold = DecimalParameter(0.25, 0.70, default=0.45, space="sell", optimize=True)
+
     # Unstuck passivbot: riduzione parziale della posizione stuck
     unstuck_threshold = DecimalParameter(0.3, 0.7, default=0.681, space="sell", optimize=True)
     unstuck_close_pct = DecimalParameter(0.02, 0.08, default=0.058, space="sell", optimize=True)
@@ -587,6 +599,12 @@ class RyLoSStrategy(IStrategy):
             dataframe["close"], timeperiod=self.ema_span_candles.value
         )
 
+        # Kaufman Efficiency Ratio per il pump-mode exit
+        er_n = self.er_period.value
+        net_move = (dataframe["close"] - dataframe["close"].shift(er_n)).abs()
+        path_len = dataframe["close"].diff().abs().rolling(er_n).sum()
+        dataframe["er"] = (net_move / path_len).fillna(0.0)
+
         return dataframe
 
     def populate_entry_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
@@ -655,6 +673,13 @@ class RyLoSStrategy(IStrategy):
         if current_profit > self.min_profit_for_overbought_exit.value:
             dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
             if len(dataframe) > 0:
+                # Pump-mode: trend efficiente → l'overbought non è un segnale
+                # di uscita, lascia lavorare solo il trailing close
+                if (
+                    self.er_exit_enabled.value
+                    and dataframe["er"].iat[-1] > self.er_trend_threshold.value
+                ):
+                    return None
                 osc = dataframe["osc_4rsi"].iat[-1]
                 stoch_k = dataframe["stoch_k"].iat[-1]
                 candle_green = dataframe["close"].iat[-1] > dataframe["open"].iat[-1]
