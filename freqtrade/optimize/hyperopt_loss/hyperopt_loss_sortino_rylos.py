@@ -23,8 +23,6 @@ Design notes (from passivbot optimizer research on grid/DCA strategies):
 import math
 from datetime import datetime
 
-import numpy as np
-
 from pandas import DataFrame, date_range
 
 from freqtrade.data.metrics import calculate_max_drawdown
@@ -48,23 +46,15 @@ DD_DISQUALIFY_FLAT = 50.0
 DD_DISQUALIFY_RAMP = 200.0
 DD_1PCT_FREE_THRESHOLD = 0.20
 DD_MEAN_1PCT_SCALE = 10.0
-# Recovery (equity REALIZZATA) — pressione alzata 2026-07-22 (v2: il 5371
-# stava 27gg sotto il picco e la penalità saturava al cap)
-RECOVERY_LOG_SCALE = 0.4
-MAX_RECOVERY_DAYS = 20.0
+# Recovery (equity REALIZZATA: si muove a gradini di trade chiusi, quindi
+# soglie più larghe del limit 12gg mark-to-market di passivbot)
+RECOVERY_LOG_SCALE = 0.3
+MAX_RECOVERY_DAYS = 30.0
 RECOVERY_GUARDRAIL_SCALE = 0.1
-# Dip mark-to-market: worst perdita NON realizzata per trade rispetto al
-# balance all'apertura (amount*(open_rate-min_rate), approssimazione buona:
-# il minimo arriva tipicamente a posizione DCA carica). Il 5371 fa 19.2%
-# di dd MTM invisibile alla loss v1 — ora costa.
-MTM_DIP_FREE = 0.15
-MTM_DIP_SCALE = 15.0
-MTM_DIP_WALL = 0.40
-MTM_DIP_WALL_FLAT = 50.0
 # Cap alle penalità recovery/held: puniscono (piu' di qualsiasi singolo
 # premio) ma non possono dominare la ricerca annegando l'asse crescita
 # (audit 2026-07-21: p_rec medio 18.5 vs premi ~1)
-RECOVERY_PENALTY_CAP = 10.0
+RECOVERY_PENALTY_CAP = 8.0
 HELD_PENALTY_CAP = 8.0
 # Anti-bag
 MAX_POSITION_HELD_DAYS = 20.0
@@ -151,27 +141,6 @@ class SortinoRyLoSHyperOptLoss(IHyperOptLoss):
         )
         held_penalty = min(held_penalty, HELD_PENALTY_CAP)
 
-        # Dip mark-to-market peggiore (perdita non realizzata / balance apertura)
-        mtm_dip = 0.0
-        if {"min_rate", "open_rate", "amount"}.issubset(results.columns) and len(results):
-            closed = results.sort_values("close_date")
-            eq_dates = closed["close_date"].to_numpy()
-            eq_cum = closed["profit_abs"].cumsum().to_numpy()
-            idx = np.searchsorted(eq_dates, results["open_date"].to_numpy(), side="left")
-            prev = np.clip(idx - 1, 0, None)
-            bal_at_open = starting_balance + np.where(idx > 0, eq_cum[prev], 0.0)
-            dip_abs = (
-                (results["amount"] * (results["open_rate"] - results["min_rate"]))
-                .clip(lower=0)
-                .to_numpy()
-            )
-            with np.errstate(divide="ignore", invalid="ignore"):
-                ratios = np.where(bal_at_open > 0, dip_abs / bal_at_open, 0.0)
-            mtm_dip = float(np.max(ratios)) if len(ratios) else 0.0
-        mtm_penalty = max(0.0, mtm_dip - MTM_DIP_FREE) * MTM_DIP_SCALE
-        if mtm_dip > MTM_DIP_WALL:
-            mtm_penalty += MTM_DIP_WALL_FLAT
-
         # Penalità durata media oltre 5h (scalping)
         avg_duration_hours = results["trade_duration"].mean() / 60
         duration_penalty = (
@@ -186,7 +155,6 @@ class SortinoRyLoSHyperOptLoss(IHyperOptLoss):
             + mdg_bonus
             + frequency_reward
             - dd_penalty
-            - mtm_penalty
             - recovery_penalty
             - held_penalty
             - duration_penalty
