@@ -64,8 +64,11 @@ class RyLoSStrategy(IStrategy):
     # Ancoraggio EMA per il primo ordine (passivbot initial_ema_dist):
     # entra solo se il prezzo è sotto EMA * (1 + dist), dist negativa
     initial_ema_dist = DecimalParameter(-0.02, 0.0, default=-0.011, space="buy", optimize=True)
-    # Span EMA in candele 5m (~340 min, passivbot ema_span 320/360)
-    ema_span_candles = IntParameter(40, 100, default=68, space="buy", optimize=False)
+    # Periodo dell'Efficiency Ratio interno al KAMA (fast/slow fissi 2/30,
+    # convenzione talib/TradingView): in laterale l'ancora si appiattisce
+    # (entry più selettive), in trend segue il prezzo senza il ritardo
+    # della EMA fissa
+    kama_period = IntParameter(10, 100, default=30, space="buy", optimize=True)
 
     # DCA cooldown dinamico (numero di candele da aspettare)
     dca_cooldown_candles = IntParameter(1, 5, default=2, space="buy", optimize=False)
@@ -125,18 +128,6 @@ class RyLoSStrategy(IStrategy):
     )
     profit_lock_threshold = DecimalParameter(0.05, 0.30, default=0.156, space="sell", optimize=True)
     profit_lock_qty_pct = DecimalParameter(0.3, 1.0, default=0.97, space="sell", optimize=True)
-
-    # Pump-mode ER (Kaufman Efficiency Ratio): |close-close[N]| / somma |diff|,
-    # 0 = laterale, 1 = trend puro. Quando il trend è efficiente (ER sopra
-    # soglia) l'exit 4RSI overbought si disattiva e resta solo il trailing
-    # close → lascia correre i vincenti nei pump invece di uscire a +3/5%.
-    # Solo lato exit: le entry non cambiano mai. Default OFF: il candidato
-    # 5371 resta identico.
-    er_exit_enabled = CategoricalParameter(
-        [True, False], default=False, space="sell", optimize=True
-    )
-    er_period = IntParameter(20, 100, default=48, space="sell", optimize=True)
-    er_trend_threshold = DecimalParameter(0.25, 0.70, default=0.45, space="sell", optimize=True)
 
     # Unstuck passivbot: riduzione parziale della posizione stuck
     unstuck_threshold = DecimalParameter(0.3, 0.7, default=0.681, space="sell", optimize=True)
@@ -594,16 +585,11 @@ class RyLoSStrategy(IStrategy):
             dataframe["high"], dataframe["low"], dataframe["close"], timeperiod=10
         )
 
-        # EMA di ancoraggio (passivbot ema_span): entry iniziale e unstuck
-        dataframe["ema_anchor"] = ta.EMA(
-            dataframe["close"], timeperiod=self.ema_span_candles.value
+        # Ancoraggio adattivo KAMA (al posto della EMA fissa passivbot):
+        # entry iniziale e unstuck
+        dataframe["ema_anchor"] = ta.KAMA(
+            dataframe["close"], timeperiod=self.kama_period.value
         )
-
-        # Kaufman Efficiency Ratio per il pump-mode exit
-        er_n = self.er_period.value
-        net_move = (dataframe["close"] - dataframe["close"].shift(er_n)).abs()
-        path_len = dataframe["close"].diff().abs().rolling(er_n).sum()
-        dataframe["er"] = (net_move / path_len).fillna(0.0)
 
         return dataframe
 
@@ -673,13 +659,6 @@ class RyLoSStrategy(IStrategy):
         if current_profit > self.min_profit_for_overbought_exit.value:
             dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
             if len(dataframe) > 0:
-                # Pump-mode: trend efficiente → l'overbought non è un segnale
-                # di uscita, lascia lavorare solo il trailing close
-                if (
-                    self.er_exit_enabled.value
-                    and dataframe["er"].iat[-1] > self.er_trend_threshold.value
-                ):
-                    return None
                 osc = dataframe["osc_4rsi"].iat[-1]
                 stoch_k = dataframe["stoch_k"].iat[-1]
                 candle_green = dataframe["close"].iat[-1] > dataframe["open"].iat[-1]
