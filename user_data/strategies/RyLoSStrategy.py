@@ -64,11 +64,8 @@ class RyLoSStrategy(IStrategy):
     # Ancoraggio EMA per il primo ordine (passivbot initial_ema_dist):
     # entra solo se il prezzo è sotto EMA * (1 + dist), dist negativa
     initial_ema_dist = DecimalParameter(-0.02, 0.0, default=-0.011, space="buy", optimize=True)
-    # Periodo dell'Efficiency Ratio interno al KAMA (fast/slow fissi 2/30,
-    # convenzione talib/TradingView): in laterale l'ancora si appiattisce
-    # (entry più selettive), in trend segue il prezzo senza il ritardo
-    # della EMA fissa
-    kama_period = IntParameter(10, 100, default=30, space="buy", optimize=True)
+    # Span EMA in candele 5m (~340 min, passivbot ema_span 320/360)
+    ema_span_candles = IntParameter(40, 100, default=68, space="buy", optimize=False)
 
     # DCA cooldown dinamico (numero di candele da aspettare)
     dca_cooldown_candles = IntParameter(1, 5, default=2, space="buy", optimize=False)
@@ -585,10 +582,9 @@ class RyLoSStrategy(IStrategy):
             dataframe["high"], dataframe["low"], dataframe["close"], timeperiod=10
         )
 
-        # Ancoraggio adattivo KAMA (al posto della EMA fissa passivbot):
-        # entry iniziale e unstuck
-        dataframe["ema_anchor"] = ta.KAMA(
-            dataframe["close"], timeperiod=self.kama_period.value
+        # EMA di ancoraggio (passivbot ema_span): entry iniziale e unstuck
+        dataframe["ema_anchor"] = ta.EMA(
+            dataframe["close"], timeperiod=self.ema_span_candles.value
         )
 
         return dataframe
