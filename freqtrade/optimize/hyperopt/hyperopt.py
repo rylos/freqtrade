@@ -7,6 +7,7 @@ This module contains the hyperopt logic
 import gc
 import logging
 import random
+import warnings
 from datetime import datetime
 from math import ceil
 from pathlib import Path
@@ -14,6 +15,7 @@ from typing import Any
 
 import rapidjson
 from joblib import Parallel, cpu_count
+from optuna.exceptions import ExperimentalWarning
 from optuna.trial import FrozenTrial, Trial, TrialState
 
 from freqtrade.constants import FTHYPT_FILEVERSION, LAST_BT_RESULT_FN, Config
@@ -228,6 +230,14 @@ class Hyperopt:
         logger.info(f"Number of parallel jobs set as: {config_jobs}")
 
         self.opt = self.hyperopter.get_optimizer(self.random_state)
+        # Seed: accoda i default della strategia (es. candidato precedente)
+        # come primo trial, così l'esplorazione parte dal bacino noto
+        seed_params = self.hyperopter.get_default_enqueue_params()
+        if seed_params:
+            logger.info(f"Enqueuing strategy defaults as first trial: {seed_params}")
+            with warnings.catch_warnings():
+                warnings.filterwarnings(action="ignore", category=ExperimentalWarning)
+                self.opt.enqueue_trial(seed_params, skip_if_exists=True)
         try:
             with Parallel(n_jobs=config_jobs) as parallel:
                 jobs = parallel._effective_n_jobs()

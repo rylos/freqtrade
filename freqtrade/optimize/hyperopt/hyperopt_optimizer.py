@@ -257,6 +257,23 @@ class HyperOptimizer:
             )
         self.o_dimensions = self.convert_dimensions_to_optuna_space(self.dimensions)
 
+    def get_default_enqueue_params(self) -> dict[str, Any]:
+        """
+        Valori di default della strategia per ogni dimensione ottimizzata:
+        usati per accodare il seed (es. candidato precedente) come primo trial.
+        """
+        strategy_params = {
+            name: param.value
+            for name, param in self.backtesting.strategy.enumerate_parameters()
+        }
+        defaults: dict[str, Any] = {}
+        for dim in self.dimensions:
+            if dim.name in strategy_params:
+                defaults[dim.name] = strategy_params[dim.name]
+            elif dim.name == "stoploss":
+                defaults[dim.name] = self.backtesting.strategy.stoploss
+        return defaults
+
     @delayed
     @wrap_non_picklable_objects
     def generate_optimizer_wrapped(self, params_dict: dict[str, Any]) -> dict[str, Any]:
