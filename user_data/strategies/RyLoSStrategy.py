@@ -44,9 +44,9 @@ class RyLoSStrategy(IStrategy):
     total_wallet_exposure_limit = DecimalParameter(
         2.0, 3.0, default=2.929, space="buy", optimize=True
     )
-    first_order_pct = DecimalParameter(0.01, 0.10, default=0.066, space="buy", optimize=True)
+    first_order_pct = DecimalParameter(0.01, 0.15, default=0.066, space="buy", optimize=True)
     dca_distance = DecimalParameter(0.003, 0.020, default=0.01, space="buy", optimize=True)
-    dca_multiplier = DecimalParameter(1.2, 3.0, default=2.713, space="buy", optimize=True)
+    dca_multiplier = DecimalParameter(1.2, 3.5, default=2.713, space="buy", optimize=True)
 
     # DCA dinamico basato su volatilità ATR
     dca_atr_multiplier = DecimalParameter(0.5, 5.0, default=1.689, space="buy", optimize=True)
@@ -64,20 +64,38 @@ class RyLoSStrategy(IStrategy):
     # Ancoraggio EMA per il primo ordine (passivbot initial_ema_dist):
     # entra solo se il prezzo è sotto EMA * (1 + dist), dist negativa
     initial_ema_dist = DecimalParameter(-0.02, 0.0, default=-0.011, space="buy", optimize=True)
-    # Span EMA in candele 5m (~340 min, passivbot ema_span 320/360)
-    ema_span_candles = IntParameter(40, 100, default=68, space="buy", optimize=False)
+    # Span EMA in candele 5m (~340 min, passivbot ema_span 320/360).
+    # Griglia discreta: in hyperopt populate_indicators gira UNA volta sola,
+    # quindi le EMA candidate vanno precalcolate lì e la selezione avviene
+    # in populate_entry_trend (che gira a ogni epoch)
+    EMA_SPAN_CHOICES = [40, 48, 56, 62, 68, 74, 80, 90, 100]
+    ema_span_candles = CategoricalParameter(
+        EMA_SPAN_CHOICES, default=68, space="buy", optimize=True
+    )
 
     # DCA cooldown dinamico (numero di candele da aspettare)
-    dca_cooldown_candles = IntParameter(1, 5, default=2, space="buy", optimize=False)
+    dca_cooldown_candles = IntParameter(1, 5, default=2, space="buy", optimize=True)
 
     # Entry: oscillatore 4RSI di RyLoS (istogramma continuo hyperoptabile
     # al posto del conteggio discreto: avg(RSI2, RSI7, RSI14) - 50)
-    osc_entry_threshold = DecimalParameter(-40, -10, default=-10.028, space="buy", optimize=True)
-    entry_stoch_os = DecimalParameter(10, 40, default=36.222, space="buy", optimize=True)
+    osc_entry_threshold = DecimalParameter(-40, -5, default=-10.028, space="buy", optimize=True)
+    entry_stoch_os = DecimalParameter(10, 50, default=36.222, space="buy", optimize=True)
+
+    # Regime ETRP (Extreme Trend Reversal Points, HeWhoMustNotBeNamed):
+    # piramide di REGIME_LEVELS medie EMA ricorsive (MA di MA), strength =
+    # numero di coppie in ordine bullish (0..55). Gate anti-falling-knife:
+    # blocca la PRIMA entry quando lo stack è troppo ribassista (crash
+    # verticale in corso). Default OFF: il seed riproduce il 5371 esatto
+    regime_enabled = CategoricalParameter(
+        [True, False], default=False, space="buy", optimize=True
+    )
+    regime_min_strength = IntParameter(0, 30, default=5, space="buy", optimize=True)
+    REGIME_MA_LENGTH = 20
+    REGIME_LEVELS = 10
 
     # Emergency DCA (prima della liquidazione)
     emergency_dca_threshold = DecimalParameter(
-        -0.15, -0.06, default=-0.067, space="buy", optimize=True
+        -0.15, -0.04, default=-0.067, space="buy", optimize=True
     )
     emergency_critical_multiplier = DecimalParameter(
         1.05, 2.0, default=1.31, space="buy", optimize=True
@@ -127,7 +145,7 @@ class RyLoSStrategy(IStrategy):
     profit_lock_qty_pct = DecimalParameter(0.3, 1.0, default=0.97, space="sell", optimize=True)
 
     # Unstuck passivbot: riduzione parziale della posizione stuck
-    unstuck_threshold = DecimalParameter(0.3, 0.7, default=0.681, space="sell", optimize=True)
+    unstuck_threshold = DecimalParameter(0.3, 0.8, default=0.681, space="sell", optimize=True)
     unstuck_close_pct = DecimalParameter(0.02, 0.08, default=0.058, space="sell", optimize=True)
     unstuck_ema_dist = DecimalParameter(-0.15, 0.0, default=-0.005, space="sell", optimize=True)
     unstuck_loss_allowance_pct = DecimalParameter(
@@ -582,9 +600,20 @@ class RyLoSStrategy(IStrategy):
             dataframe["high"], dataframe["low"], dataframe["close"], timeperiod=10
         )
 
-        # EMA di ancoraggio (passivbot ema_span): entry iniziale e unstuck
-        dataframe["ema_anchor"] = ta.EMA(
-            dataframe["close"], timeperiod=self.ema_span_candles.value
+        # EMA di ancoraggio (passivbot ema_span): precalcolate tutte le
+        # candidate della griglia; la selezione in populate_entry_trend
+        for span in self.EMA_SPAN_CHOICES:
+            dataframe[f"ema_{span}"] = ta.EMA(dataframe["close"], timeperiod=span)
+
+        # Regime ETRP: strength = coppie (i<j) della piramide di medie
+        # ricorsive con MA_i > MA_j (0..55, 55 = stack pienamente bullish)
+        mas = [dataframe["close"]]
+        for _ in range(self.REGIME_LEVELS):
+            mas.append(ta.EMA(mas[-1], timeperiod=self.REGIME_MA_LENGTH))
+        dataframe["regime_strength"] = sum(
+            (mas[i] > mas[j]).astype("int8")
+            for i in range(len(mas))
+            for j in range(i + 1, len(mas))
         )
 
         return dataframe
@@ -593,6 +622,9 @@ class RyLoSStrategy(IStrategy):
         # Nuovo epoch/backtest: svuota la cache degli estremi (solo memoria,
         # i valori restano comunque validi tra epoch)
         self._extremes_cache.clear()
+
+        # Ancora EMA selezionata dalla griglia precalcolata (per-epoch)
+        dataframe["ema_anchor"] = dataframe[f"ema_{self.ema_span_candles.value}"]
 
         # 4RSI oversold: istogramma sotto soglia + filtro stocastico
         osc_condition = (dataframe["osc_4rsi"] < self.osc_entry_threshold.value).fillna(False)
@@ -609,6 +641,13 @@ class RyLoSStrategy(IStrategy):
             & (dataframe["close"] < dataframe["open"])
             & ema_condition
         )
+
+        # Gate regime ETRP: con lo stack di medie in pieno assetto ribassista
+        # la prima entry è un coltello che cade — sotto soglia non si compra
+        if self.regime_enabled.value:
+            entry_condition &= (
+                dataframe["regime_strength"] >= self.regime_min_strength.value
+            ).fillna(False)
 
         dataframe["enter_tag"] = ""
         for idx in dataframe.index[entry_condition]:
