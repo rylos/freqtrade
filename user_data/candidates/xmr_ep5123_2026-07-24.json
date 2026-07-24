@@ -1,0 +1,42 @@
+{
+  "note": "Candidato XMR/USDT:USDT bybit futures — run hyperopt 2026-07-23/24 su debian, seed 5371, timerange 20240101- (934 giorni), loss SortinoRyLoS, stoppato da Marco a 7560/10000 epoch. Selezione Pareto: dominava ogni fascia di dd (miglior loss sia a dd<=12% che <=15% che <=20%).",
+  "epoch_line": 5123,
+  "loss": -27.51309252482936,
+  "metrics": {
+    "profit_total_pct": 1010.1,
+    "max_drawdown_account_pct": 11.1,
+    "total_trades": 2630,
+    "win_pct": 98.8
+  },
+  "params": {
+    "dca_atr_multiplier": 4.927,
+    "dca_distance": 0.013,
+    "dca_multiplier": 2.173,
+    "dca_trailing_retracement_pct": 0.002,
+    "dca_we_weight": 0.469,
+    "emergency_critical_multiplier": 1.139,
+    "emergency_dca_threshold": -0.078,
+    "entry_stoch_os": 33.157,
+    "first_order_pct": 0.081,
+    "initial_ema_dist": -0.001,
+    "osc_entry_threshold": -10.034,
+    "total_wallet_exposure_limit": 2.615,
+    "close_grid_enabled": true,
+    "close_grid_markup_pct": 0.002,
+    "close_grid_qty_pct": 0.105,
+    "close_trailing_retracement_pct": 0.006,
+    "close_trailing_threshold_pct": 0.016,
+    "exit_stoch_ob": 66.923,
+    "min_profit_for_overbought_exit": 0.029,
+    "osc_exit_threshold": 10.094,
+    "profit_lock_enabled": false,
+    "profit_lock_qty_pct": 0.633,
+    "profit_lock_threshold": 0.156,
+    "unstuck_close_pct": 0.04,
+    "unstuck_ema_dist": -0.001,
+    "unstuck_loss_allowance_pct": 0.014,
+    "unstuck_max_held_days": 17,
+    "unstuck_threshold": 0.633,
+    "stoploss": -0.524
+  }
+}
