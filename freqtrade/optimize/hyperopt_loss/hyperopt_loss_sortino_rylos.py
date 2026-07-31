@@ -55,11 +55,24 @@ RECOVERY_GUARDRAIL_SCALE = 0.1
 # premio) ma non possono dominare la ricerca annegando l'asse crescita
 # (audit 2026-07-21: p_rec medio 18.5 vs premi ~1)
 RECOVERY_PENALTY_CAP = 8.0
-HELD_PENALTY_CAP = 8.0
-# Anti-bag
-MAX_POSITION_HELD_DAYS = 20.0
+# Anti-bag — ricalibrato 2026-07-31 sul dominio REALE delle durate.
+# Misura sui 828 trade del 5371: durata mediana 2.8h, p90 26.8h, p99 139h,
+# massimo 15.2 giorni. Il guardrail a 20 giorni non è quindi MAI scattato, e
+# col cap a 8 la penalità held valeva ~1.7 punti contro i ~18 del premio
+# profitto: l'asse anti-bag era di fatto scollegato dalla ricerca.
+# Nuove soglie dentro il dominio osservato, cap alzato perché possa mordere.
+HELD_PENALTY_CAP = 15.0
+MAX_POSITION_HELD_DAYS = 4.0
 HELD_DAYS_PENALTY_SCALE = 0.6
-HELD_DAYS_GUARDRAIL_SCALE = 0.2
+HELD_DAYS_GUARDRAIL_SCALE = 0.4
+# Coda delle durate: il max da solo è un singolo trade, non dice quanto
+# capitale resta immobilizzato. Questo termine pesa la quota di ORE-TRADE
+# spese oltre TAIL_DAYS_THRESHOLD sul totale (5371: 17.5%).
+# Motivazione empirica: nel 5371 i trade oltre 3 giorni sono 25 su 828 e
+# valgono -228k USDT, il -9.4% del P&L — la coda lunga distrugge valore,
+# tutto il rendimento viene dai 736 trade chiusi entro 24h.
+TAIL_DAYS_THRESHOLD = 3.0
+TAIL_HOURS_SHARE_SCALE = 12.0
 # Scalping: reward frequenza rafforzato + penalità durata media oltre 5h
 MAX_AVG_DURATION_HOURS = 5.0
 DURATION_PENALTY_SCALE = 1.0
@@ -133,12 +146,23 @@ class SortinoRyLoSHyperOptLoss(IHyperOptLoss):
         )
         recovery_penalty = min(recovery_penalty, RECOVERY_PENALTY_CAP)
 
-        # passivbot: position_held_days_max (min) — continua + guardrail >20gg
+        # passivbot: position_held_days_max (min) — continua + guardrail
         max_held_days = results["trade_duration"].max() / (60 * 24)
         held_penalty = math.log1p(max_held_days) * HELD_DAYS_PENALTY_SCALE
         held_penalty += (
             max(0.0, max_held_days - MAX_POSITION_HELD_DAYS) * HELD_DAYS_GUARDRAIL_SCALE
         )
+
+        # Coda: quota di ore-trade spese oltre la soglia sul monte-ore totale.
+        # Il max_held guarda un solo trade; questo guarda quanto capitale resta
+        # immobilizzato in bag lunghi, che è ciò che si vuole comprimere.
+        durations_h = results["trade_duration"] / 60
+        total_hours = float(durations_h.sum())
+        tail_hours = float(
+            (durations_h - TAIL_DAYS_THRESHOLD * 24).clip(lower=0.0).sum()
+        )
+        tail_share = tail_hours / total_hours if total_hours > 0 else 0.0
+        held_penalty += tail_share * TAIL_HOURS_SHARE_SCALE
         held_penalty = min(held_penalty, HELD_PENALTY_CAP)
 
         # Penalità durata media oltre 5h (scalping)

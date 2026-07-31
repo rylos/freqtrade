@@ -66,9 +66,11 @@ class RyLoSStrategy(IStrategy):
     # inutilizzabile: a griglia esaurita non si ricompra più. Con reentry
     # attivo la capacità torna disponibile quando l'esposizione è scesa sotto
     # reentry_exposure, alle stesse condizioni di trailing entry dei DCA.
-    # Default ON dal 2026-07-31.
+    # Default neutro (OFF) per il seed, ma resta nello spazio: nel run cieco
+    # era acceso nell'86.5% del top-200 — indizio non conclusivo (stessa firma
+    # dell'esperimento ER, che all'A/B risultò inerte), va falsificato.
     reentry_enabled = CategoricalParameter(
-        [True, False], default=True, space="buy", optimize=True
+        [True, False], default=False, space="buy", optimize=True
     )
     reentry_exposure = DecimalParameter(0.30, 0.90, default=0.60, space="buy", optimize=True)
 
@@ -144,8 +146,35 @@ class RyLoSStrategy(IStrategy):
     unstuck_loss_allowance_pct = DecimalParameter(
         0.005, 0.02, default=0.007, space="sell", optimize=True
     )
-    # Anti-bag: oltre questi giorni la posizione è considerata stuck comunque
-    unstuck_max_held_days = IntParameter(5, 20, default=16, space="sell", optimize=True)
+    # Anti-bag: oltre questi giorni la posizione è considerata stuck comunque.
+    # Bound estesi verso il basso (era 5-20) perché il dominio reale delle
+    # durate è molto più corto: misura 2026-07-31 sui 828 trade del 5371 —
+    # mediana 2.8h, p90 26.8h, p99 5.8gg, max 15.2gg. Default 16 = 5371 esatto.
+    # ⚠️ Da solo un valore basso è CONTROPRODUCENTE: l'unstuck lima ma non
+    # chiude, quindi il bag entra in rasatura perpetua e blocca l'unico slot
+    # (misurato: trade da 123 giorni con 215 ordini, profitto 0.46x).
+    # Va accoppiato a time_exit_*, che è il meccanismo che chiude davvero.
+    unstuck_max_held_days = IntParameter(1, 16, default=16, space="sell", optimize=True)
+
+    # Clip progressiva con l'età del bag: la fetta cresce con i giorni di
+    # holding, così l'unstuck morde i 25 trade lunghi (3% del totale, -9.4% del
+    # P&L) senza toccare i 736 che chiudono entro 24h. 0.0 = clip costante
+    # (comportamento storico). Scala anche il budget di perdita per clip,
+    # altrimenti su un bag vecchio e profondo la clip resta bloccata.
+    unstuck_age_scaling = DecimalParameter(0.0, 1.0, default=0.0, space="sell", optimize=True)
+    UNSTUCK_MAX_CLIP_PCT = 0.50
+
+    # ===== TIME EXIT: chiusura per anzianità =====
+    # Il pezzo che mancava a tutta la meccanica anti-bag. L'unstuck riduce ma
+    # non chiude mai, quindi senza questo un bag può restare aperto per mesi
+    # occupando l'unico slot. Misura 2026-07-31 sul 5371: i 25 trade oltre 3
+    # giorni (3% del totale) valgono -228k USDT, il -9.4% del P&L, mentre i 736
+    # chiusi entro 24h valgono il +102%. La coda lunga distrugge valore.
+    # Default OFF = comportamento storico.
+    time_exit_enabled = CategoricalParameter(
+        [True, False], default=False, space="sell", optimize=True
+    )
+    time_exit_days = IntParameter(2, 15, default=7, space="sell", optimize=True)
 
     # ===== IDEA 1 — isteresi dell'unstuck =====
     # L'unstuck arma a unstuck_threshold e si disarma appena sotto: sul trade
@@ -153,9 +182,10 @@ class RyLoSStrategy(IStrategy):
     # bag ancora al 98% del tetto. Con release_ratio < 1 continua a limare
     # finché l'esposizione non scende a threshold * release_ratio.
     # 1.0 = comportamento storico (arma e disarma alla stessa soglia).
-    # Default 0.70 dal 2026-07-31: meccanica ATTIVA (rilascio a 0.70*threshold).
+    # Torna a default neutro 1.0: resta ottimizzabile perché interagisce con
+    # la nuova clip progressiva, ma il seed deve essere il 5371 esatto.
     unstuck_release_ratio = DecimalParameter(
-        0.5, 1.0, default=0.70, space="sell", optimize=True
+        0.5, 1.0, default=1.0, space="sell", optimize=True
     )
 
     # ===== IDEA 2 — harvest a griglia esaurita =====
@@ -163,23 +193,28 @@ class RyLoSStrategy(IStrategy):
     # close_grid lavora sul markup dalla MEDIA, che un bag sott'acqua non
     # rivede per giorni. Qui il markup è sull'ULTIMO fill (il carico più
     # basso), così ogni rimbalzo locale può alleggerire la posizione.
-    # Default ON dal 2026-07-31.
+    # SPENTA e fuori dallo spazio dal 2026-07-31: nel run cieco la quota di
+    # harvest ON nel top-200 (46%) era identica a quella globale (46.8%) —
+    # nessuna pressione selettiva. Il codice resta per un'eventuale ablazione.
     harvest_enabled = CategoricalParameter(
-        [True, False], default=True, space="sell", optimize=True
+        [True, False], default=False, space="sell", optimize=False
     )
     harvest_markup_pct = DecimalParameter(
-        0.005, 0.05, default=0.02, space="sell", optimize=True
+        0.005, 0.05, default=0.02, space="sell", optimize=False
     )
-    harvest_qty_pct = DecimalParameter(0.05, 0.40, default=0.15, space="sell", optimize=True)
+    harvest_qty_pct = DecimalParameter(0.05, 0.40, default=0.15, space="sell", optimize=False)
 
     # ===== IDEA 4 — ancoraggio del guard-stoploss =====
     # freqtrade fissa lo stop sul prezzo della PRIMA entry e non lo sposta:
     # dopo i DCA la media scende sotto quel prezzo e lo stop effettivo vale
     # meno del parametro ottimizzato (trade live 3: -62% dello stake invece
     # del -72% nominale). "average" lo ri-ancora alla media a ogni fill.
-    # "first_entry" = comportamento storico; default "average" dal 2026-07-31.
+    # BOCCIATA e fuori dallo spazio dal 2026-07-31: "average" non compare in
+    # NESSUNA delle prime 200 epoch del run cieco pur essendo campionata nel
+    # 14% dei casi. Ri-ancorare alla media allarga la distanza dallo stop e
+    # quindi la perdita quando scatta. Il codice resta per riferimento.
     stoploss_anchor = CategoricalParameter(
-        ["first_entry", "average"], default="average", space="sell", optimize=True
+        ["first_entry", "average"], default="first_entry", space="sell", optimize=False
     )
     use_custom_stoploss = True
 
@@ -479,13 +514,25 @@ class RyLoSStrategy(IStrategy):
                         if ema and current_rate >= ema * (1 + self.unstuck_ema_dist.value):
                             if total_balance is None:
                                 total_balance = self.wallets.get_total_stake_amount()
-                            reduce_stake = trade.stake_amount * self.unstuck_close_pct.value
+                            # Fattore età: 1.0 il primo giorno, poi cresce.
+                            # age_scaling 0.0 = clip costante come da storico.
+                            age_factor = 1.0 + self.unstuck_age_scaling.value * max(
+                                0.0, held_days - 1.0
+                            )
+                            reduce_stake = trade.stake_amount * min(
+                                self.UNSTUCK_MAX_CLIP_PCT,
+                                self.unstuck_close_pct.value * age_factor,
+                            )
                             # Budget di perdita per clip: non realizzare più di
                             # loss_allowance_pct del balance in una singola riduzione
+                            # (scalato con l'età, altrimenti il budget blocca
+                            # proprio le clip sui bag vecchi che vogliamo limare)
                             estimated_loss = reduce_stake * abs(current_profit)
                             if (
                                 estimated_loss
-                                <= total_balance * self.unstuck_loss_allowance_pct.value
+                                <= total_balance
+                                * self.unstuck_loss_allowance_pct.value
+                                * age_factor
                             ):
                                 self._last_unstuck[trade.id] = current_time
                                 return (
@@ -786,6 +833,14 @@ class RyLoSStrategy(IStrategy):
                     )
                     if max_since_open >= threshold_price and current_rate <= retracement_price:
                         return f"sell_trailing_close_{current_profit * 100:.1f}%"
+
+        # ===== TIME EXIT: chiude il bag per anzianità =====
+        # Va PRIMA degli altri exit condizionati al profitto: è l'unico che
+        # chiude anche in perdita, e senza di lui l'unstuck lima all'infinito.
+        if self.time_exit_enabled.value:
+            held_days = (current_time - trade.open_date_utc).total_seconds() / 86400
+            if held_days >= self.time_exit_days.value:
+                return f"time_exit_{held_days:.1f}d_{current_profit * 100:.1f}%"
 
         # ===== 4RSI Overbought Exit (istogramma continuo) =====
         if current_profit > self.min_profit_for_overbought_exit.value:
