@@ -66,9 +66,9 @@ class RyLoSStrategy(IStrategy):
     # inutilizzabile: a griglia esaurita non si ricompra più. Con reentry
     # attivo la capacità torna disponibile quando l'esposizione è scesa sotto
     # reentry_exposure, alle stesse condizioni di trailing entry dei DCA.
-    # Default OFF.
+    # Default ON dal 2026-07-31.
     reentry_enabled = CategoricalParameter(
-        [True, False], default=False, space="buy", optimize=True
+        [True, False], default=True, space="buy", optimize=True
     )
     reentry_exposure = DecimalParameter(0.30, 0.90, default=0.60, space="buy", optimize=True)
 
@@ -152,9 +152,10 @@ class RyLoSStrategy(IStrategy):
     # live del 27/07 si è fermato a exposure 0.668 vs soglia 0.681, cioè col
     # bag ancora al 98% del tetto. Con release_ratio < 1 continua a limare
     # finché l'esposizione non scende a threshold * release_ratio.
-    # Default 1.0 = comportamento storico (arma e disarma alla stessa soglia).
+    # 1.0 = comportamento storico (arma e disarma alla stessa soglia).
+    # Default 0.70 dal 2026-07-31: meccanica ATTIVA (rilascio a 0.70*threshold).
     unstuck_release_ratio = DecimalParameter(
-        0.5, 1.0, default=1.0, space="sell", optimize=True
+        0.5, 1.0, default=0.70, space="sell", optimize=True
     )
 
     # ===== IDEA 2 — harvest a griglia esaurita =====
@@ -162,9 +163,9 @@ class RyLoSStrategy(IStrategy):
     # close_grid lavora sul markup dalla MEDIA, che un bag sott'acqua non
     # rivede per giorni. Qui il markup è sull'ULTIMO fill (il carico più
     # basso), così ogni rimbalzo locale può alleggerire la posizione.
-    # Default OFF.
+    # Default ON dal 2026-07-31.
     harvest_enabled = CategoricalParameter(
-        [True, False], default=False, space="sell", optimize=True
+        [True, False], default=True, space="sell", optimize=True
     )
     harvest_markup_pct = DecimalParameter(
         0.005, 0.05, default=0.02, space="sell", optimize=True
@@ -176,9 +177,9 @@ class RyLoSStrategy(IStrategy):
     # dopo i DCA la media scende sotto quel prezzo e lo stop effettivo vale
     # meno del parametro ottimizzato (trade live 3: -62% dello stake invece
     # del -72% nominale). "average" lo ri-ancora alla media a ogni fill.
-    # Default "first_entry" = comportamento storico.
+    # "first_entry" = comportamento storico; default "average" dal 2026-07-31.
     stoploss_anchor = CategoricalParameter(
-        ["first_entry", "average"], default="first_entry", space="sell", optimize=True
+        ["first_entry", "average"], default="average", space="sell", optimize=True
     )
     use_custom_stoploss = True
 

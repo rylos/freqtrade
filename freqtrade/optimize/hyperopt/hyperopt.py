@@ -231,8 +231,14 @@ class Hyperopt:
 
         self.opt = self.hyperopter.get_optimizer(self.random_state)
         # Seed: accoda i default della strategia (es. candidato precedente)
-        # come primo trial, così l'esplorazione parte dal bacino noto
-        seed_params = self.hyperopter.get_default_enqueue_params()
+        # come primo trial, così l'esplorazione parte dal bacino noto.
+        # Disattivabile con "hyperopt_seed_defaults": false nel config, per i
+        # run che devono esplorare in cieco senza ancorarsi al candidato noto.
+        seed_params = (
+            self.hyperopter.get_default_enqueue_params()
+            if self.config.get("hyperopt_seed_defaults", True)
+            else {}
+        )
         if seed_params:
             logger.info(f"Enqueuing strategy defaults as first trial: {seed_params}")
             with warnings.catch_warnings():
