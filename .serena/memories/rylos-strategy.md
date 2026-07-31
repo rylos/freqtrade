@@ -98,6 +98,47 @@ Bound estesi sui saturi del 5371: osc_entry −40..−5 (era saturo a −10, ok 
 - **Regressione post-merge su debian bit-perfetta**: 828 trade, +26.457,15%, dd 11,94%, underwater 19,15%, Sortino 2,35 = identici al riferimento. Deployato anche su amazon (`2026.7-dev-b0eabf4`), riavvio a bot flat, downtime ~1 minuto
 - **Candidato XMR ep5123** (commit `bccb2eeee` del 24/07, `user_data/candidates/xmr_ep5123_2026-07-24.json`): +1010% su 934gg, dd 11,1%, 2630 trade, win 98,8%; run fermato da Marco a 7560/10000 epoch, dominava ogni fascia di dd. **NON deployato** — resta HYPE l'unica coin live. Doc tecnica completa della strategia in `user_data/strategies/RyLoSStrategy.md`
 
+## Drift check live-vs-backtest SUPERATO (2026-07-31)
+Backtest della finestra out-of-sample 22-31/07 (dati riscaricati fino al 31/07 08:10 su debian e pc-work) confrontato coi 3 trade live:
+- Trade 1 (23/07 16:35 → 24/07 07:10, `sell_4rsi_29`) e trade 2 (24/07 21:10 → 25/07 09:50, `sell_4rsi_36`): timestamp ed exit reason **identici**
+- Trade 3: 3 entry + 7 clip unstuck in entrambi, prezzi entry a 0.1-0.2% (slippage di esecuzione)
+- ⚠️ **Il confronto funziona solo passando `--dry-run-wallet` col saldo reale**: col default 10000 il backtest si ferma a 2 entry e zero clip. Dettagli e regola generale in `mem:tech`
+
+## SCOPERTA 2026-07-31: la coda lunga distrugge valore, e mancava un meccanismo di chiusura
+
+**Analisi P&L per fascia di durata sui 828 trade del 5371** (range esteso al 31/07):
+| durata | trade | P&L | quota |
+|---|---|---|---|
+| < 1 giorno | 736 | +2.474.168 | **+102,2%** |
+| 1-3 giorni | 67 | +175.066 | +7,2% |
+| 3-7 giorni | 18 | −83.744 | −3,5% |
+| > 7 giorni | 7 | −144.458 | −6,0% |
+Durata mediana **2,8h**, p90 26,8h, p99 5,8gg, max 15,2gg. I 25 trade oltre 3 giorni valgono **−228.201 USDT (−9,4% del P&L)**: tutto il rendimento viene dai 736 chiusi entro 24h. Attenzione alla causalità: 19 di quei 25 chiudono in profitto, sono i 6 perdenti (guard-stop, durata mediana 43,9h, costo −585.636 = un quarto del P&L) a rovinare la fascia → la mossa giusta NON è chiudere tutto a 3 giorni ma ridurre l'esposizione con l'età.
+
+**⚠️ L'unstuck riduce ma non chiude MAI.** Abbassare `unstuck_max_held_days` senza un meccanismo di chiusura produce rasatura perpetua: misurato un trade da **123 giorni con 215 ordini** che blocca l'unico slot (`max_open_trades=1`) → profitto 0,46x. Spiega perché l'optimizer avesse sempre scelto 16 giorni: i valori bassi, da soli, sono una trappola. **Non riproporre soglie basse senza time_exit.**
+
+**`time_exit_enabled` / `time_exit_days` (commit `894033a56e`)**: chiude il bag per anzianità in `custom_exit`, prima degli exit condizionati al profitto (è l'unico che chiude anche in perdita). Scan della soglia col nuovo objective: 3g −39,666 | **4g −40,304** | 5g −37,426 | 6g −37,621 | 7g −38,763 | 8g −39,615 (curva irregolare: ogni taglio cambia la catena di compounding).
+**5371 + time_exit 4g = nuovo candidato di riferimento**: profitto +18.827% (0,78x), **max holding 4,0gg contro 15,2**, **trade oltre 7 giorni 0 contro 7**, ore-capitale immobilizzate oltre 3g −24% (2595 vs 3406), guard-stop 11 (−9% del lordo) contro 13 (−14%), durata media 10,1h vs 11,1h, dd 8,84% vs 8,57%. Le 24 chiusure per anzianità sono quasi tutte in perdita (−1,5% .. −37,4%) ma nessuna pesa oltre il 2% del lordo.
+
+## Esperimento 4 idee — BOCCIATE (2026-07-31)
+Nato dal trade 3 live (griglia esaurita in 4h20, poi giorni fermo mentre il prezzo oscilla senza toccare né exit né stop). Commit `e7ae7d262`, backup tag `rylos-5371-pre-4idee-20260731`. **Tutte e 4 con default neutro: a default la strategia è il 5371 bit-perfetto** (regressione su debian: 828 trade, +26.457,15%, dd 11,94%, underwater 19,15%) — è l'optimizer a decidere se accenderle:
+1. `unstuck_release_ratio` (default 1.0): isteresi: oggi l'unstuck arma e disarma alla stessa soglia e si ferma col bag al 98% del tetto (live: exposure 0.668 vs 0.681)
+2. `harvest_*` (default OFF): a griglia esaurita non esistono né DCA né clip in profitto; clip col markup sull'ULTIMO fill invece che sulla media, stesso budget di perdita dell'unstuck
+3. `reentry_*` (default OFF): lo spazio TWE liberato dalle clip oggi resta congelato, qui torna comprabile alle condizioni di trailing entry
+4. `stoploss_anchor` (default "first_entry"): freqtrade ancora il guard-stop alla PRIMA entry e non lo sposta più → dopo i DCA lo stop effettivo è più stretto del parametro ottimizzato (live: −62% dello stake invece del −72% nominale). "average" lo ri-ancora via `custom_stoploss` + `after_fill`, **l'unico contesto in cui freqtrade consente di allargare la distanza**
+- ⚠️ La doc sconsiglia esplicitamente lo stop in `custom_exit` ("rate-based exits in backtesting can be inaccurate"): lo stop nativo è valutato sul **low della candela**, un callback sul prezzo corrente → in un crash il backtest mentirebbe a favore
+**Esito (run cieco 1500 epoch + run seedato)**: idea 4 `stoploss_anchor="average"` BOCCIATA (0 presenze nelle prime 200 epoch pur essendo campionata al 14%) → `optimize=False`. Idea 2 `harvest` INDIFFERENTE (46% nel top-200 = 46,8% globale) → `optimize=False`. Idea 1 isteresi e idea 3 `reentry` restano nello spazio ma con default neutro: reentry all'86,5% nel top-200 è la stessa firma dell'ER (dominanza da autostop evolutivo, poi risultato inerte all'A/B) — **va falsificato con un'ablazione, non creduto sulla frequenza**. Coi default accesi a naso il combinato faceva +9.867% e underwater 27,67% contro +24.210% / 19,15% del 5371: peggio su crescita E rischio.
+
+## Loss: taratura delle penalità temporali (2026-07-31, commit `b54c0a2800`)
+- ⚠️ **Le soglie erano fuori dal dominio reale**: guardrail held a 20 giorni (max reale 15,2) e recovery a 30 (reale 15,9) → entrambi MAI scattati; col cap a 8 la penalità held valeva ~1,7 punti contro i ~18 del premio profitto
+- Prima taratura SBAGLIATA (cap 15, guardrail 0,4, tail scale 12): swing 7,4 punti. **Il premio profitto è log(profit)×4, quindi 8x di profitto valgono solo ~8 punti** → la loss preferiva l'epoch 436 (+3.105%, dd 15,2%, 39 giorni sott'acqua) al seed (+24.210%, dd 8,57%, 15 giorni). Lezione: qualsiasi penalità nuova va dimensionata contro la scala logaritmica del premio profitto
+- Taratura corretta: `HELD_PENALTY_CAP` 4, `MAX_POSITION_HELD_DAYS` 6, `HELD_DAYS_GUARDRAIL_SCALE` 0.05, `TAIL_HOURS_SHARE_SCALE` 2.0, `MAX_RECOVERY_DAYS` 15. Swing ~1,6 punti = tie-breaker fra configurazioni comparabili, tollera al massimo ~1,5x di profitto in meno
+- Nuovo termine `TAIL_HOURS_SHARE_SCALE`: quota di ORE-TRADE oltre 3 giorni sul monte-ore totale (5371: 17,5%) — il max_held guarda un solo trade, questo misura quanto capitale resta immobilizzato
+
+## Run in corso (2026-07-31 12:28)
+tmux `ft-hyperopt` su debian, 10k epoch, `--spaces buy sell stoploss`, **range 20241205-20260731** (esteso, objective NON confrontabile col vecchio −43,068), -j 30, ~14 epoch/min. **Seed = 5371 + time_exit 4g, objective −40,30442**. Interruttore `hyperopt_seed_defaults` nel config (default true) per i run ciechi: `user_data/config_noseed.json` come secondo `-c`.
+- Due run ciechi su due finiti in bacini inferiori (best −37,75 contro il seed a −40,30): **il seeding non è opzionale**
+
 ## Esperimento loss v2 BOCCIATO (2026-07-22)
 Tentativo di migliorare dd MTM (19.2%) e underwater (27g) del 5371 con: penalità dip mark-to-market per trade (amount*(open-min_rate)/balance, franco 15%) + recovery rafforzato (20gg, x0.4, cap 10). Risultato dopo ~2500 epoch: profilo sgradito a Marco — winrate 92% (vs 98), 70-80 stop realizzati, crescita molto più lenta. **Run fermato, loss riportata alla v1 (commit bb996a282)**. Lezione: spingere il rischio non realizzato dentro la loss produce famiglie stop-heavy che Marco non vuole; il 19.2%/27g del 5371 è un trade-off accettato. NON riproporre la v2.
 
