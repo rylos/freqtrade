@@ -242,9 +242,10 @@ class RyLoSStrategy(IStrategy):
     # Cache per-epoch (svuotate in populate_entry_trend)
     _extremes_cache: dict = {}
     _fill_cache: dict = {}
-    _last_unstuck: dict = {}
-    _last_harvest: dict = {}
-    _last_time_exit: dict = {}
+    # Nessuno stato di cooldown in memoria: i timestamp si derivano dagli
+    # ordini (vedi _last_exit_time), questa è solo una cache invalidata dal
+    # numero di ordini del trade.
+    _exit_time_cache: dict = {}
     _max_orders_cache: int | None = None
 
     class HyperOpt:
@@ -297,6 +298,34 @@ class RyLoSStrategy(IStrategy):
             )
         self._fill_cache[trade.id] = (n_orders, info)
         return info
+
+    def _last_exit_time(self, trade: Trade, prefix: str) -> datetime | None:
+        """
+        Data dell'ultimo exit fillato con tag che inizia per `prefix`.
+
+        I cooldown (time exit, unstuck, harvest) NON devono vivere in memoria:
+        un riavvio del bot azzererebbe il contatore e la clip successiva
+        partirebbe subito invece che dopo il cooldown — un difetto invisibile
+        in backtest, dove il processo non riparte mai. Gli ordini stanno nel
+        database, quindi derivare il timestamp da lì è corretto in tutti i
+        casi: bot nuovo, bot riavviato, backtest, dry-run.
+
+        Cache invalidata dal numero di ordini, come `_entry_fill_info`.
+        """
+        n_orders = len(trade.orders)
+        key = (trade.id, prefix)
+        cached = self._exit_time_cache.get(key)
+        if cached is not None and cached[0] == n_orders:
+            return cached[1]
+        last_time = None
+        for order in trade.select_filled_orders(trade.exit_side):
+            tag = order.ft_order_tag or ""
+            if tag.startswith(prefix) and order.order_filled_date is not None:
+                filled = order.order_filled_date.replace(tzinfo=timezone.utc)
+                if last_time is None or filled > last_time:
+                    last_time = filled
+        self._exit_time_cache[key] = (n_orders, last_time)
+        return last_time
 
     def _window_extremes(
         self, pair: str, anchor_time: datetime, current_time
@@ -493,7 +522,7 @@ class RyLoSStrategy(IStrategy):
         if self.time_exit_enabled.value:
             held_days = (current_time - trade.open_date_utc).total_seconds() / 86400
             if held_days >= self.time_exit_days.value:
-                last_te = self._last_time_exit.get(trade.id)
+                last_te = self._last_exit_time(trade, "time_exit_")
                 if last_te is None or (current_time - last_te) >= timedelta(
                     hours=self.TIME_EXIT_COOLDOWN_H
                 ):
@@ -508,7 +537,6 @@ class RyLoSStrategy(IStrategy):
                     remaining = trade.stake_amount - reduce_stake
                     if min_stake and remaining < min_stake * 2:
                         reduce_stake = trade.stake_amount
-                    self._last_time_exit[trade.id] = current_time
                     return (
                         -reduce_stake,
                         f"time_exit_{held_days:.1f}d_{current_profit * 100:.1f}%",
@@ -532,13 +560,13 @@ class RyLoSStrategy(IStrategy):
                 # release_ratio 1.0 = soglia unica (comportamento storico).
                 trigger = self.unstuck_threshold.value * (
                     self.unstuck_release_ratio.value
-                    if trade.id in self._last_unstuck
+                    if self._last_exit_time(trade, "unstuck_") is not None
                     else 1.0
                 )
                 is_stuck = exposure_ratio >= trigger
             if is_stuck:
                 # Cooldown dedicato tra clip (limita anche il numero di ordini)
-                last_unstuck = self._last_unstuck.get(trade.id)
+                last_unstuck = self._last_exit_time(trade, "unstuck_")
                 unstuck_wait = timedelta(
                     minutes=timeframe_to_minutes(self.timeframe) * self.UNSTUCK_COOLDOWN_CANDLES
                 )
@@ -571,7 +599,6 @@ class RyLoSStrategy(IStrategy):
                                 * self.unstuck_loss_allowance_pct.value
                                 * age_factor
                             ):
-                                self._last_unstuck[trade.id] = current_time
                                 return (
                                     -reduce_stake,
                                     f"unstuck_{held_days:.1f}d_{current_profit * 100:.1f}%",
@@ -588,7 +615,7 @@ class RyLoSStrategy(IStrategy):
             if total_balance is None:
                 total_balance = self.wallets.get_total_stake_amount()
             if n_entries > self.calculate_max_orders(total_balance):
-                last_harvest = self._last_harvest.get(trade.id)
+                last_harvest = self._last_exit_time(trade, "harvest_")
                 harvest_wait = timedelta(
                     minutes=timeframe_to_minutes(self.timeframe) * self.UNSTUCK_COOLDOWN_CANDLES
                 )
@@ -602,7 +629,6 @@ class RyLoSStrategy(IStrategy):
                         estimated_loss
                         <= total_balance * self.unstuck_loss_allowance_pct.value
                     ):
-                        self._last_harvest[trade.id] = current_time
                         markup = (current_rate - last_order_price) / last_order_price
                         return -reduce_stake, f"harvest_{markup * 100:.1f}%"
 
@@ -813,6 +839,7 @@ class RyLoSStrategy(IStrategy):
         # Nuovo epoch/backtest: svuota la cache degli estremi (solo memoria,
         # i valori restano comunque validi tra epoch)
         self._extremes_cache.clear()
+        self._exit_time_cache.clear()
 
         # 4RSI oversold: istogramma sotto soglia + filtro stocastico
         osc_condition = (dataframe["osc_4rsi"] < self.osc_entry_threshold.value).fillna(False)
