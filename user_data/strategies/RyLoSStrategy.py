@@ -172,9 +172,9 @@ class RyLoSStrategy(IStrategy):
     # chiusi entro 24h valgono il +102%. La coda lunga distrugge valore.
     # Default OFF = comportamento storico.
     time_exit_enabled = CategoricalParameter(
-        [True, False], default=False, space="sell", optimize=True
+        [True, False], default=True, space="sell", optimize=True
     )
-    time_exit_days = IntParameter(2, 15, default=7, space="sell", optimize=True)
+    time_exit_days = IntParameter(2, 15, default=4, space="sell", optimize=True)
 
     # ===== IDEA 1 — isteresi dell'unstuck =====
     # L'unstuck arma a unstuck_threshold e si disarma appena sotto: sul trade
