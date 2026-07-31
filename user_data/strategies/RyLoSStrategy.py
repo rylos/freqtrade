@@ -260,6 +260,52 @@ class RyLoSStrategy(IStrategy):
 
             return [SKDecimal(-0.85, -0.60, decimals=3, name="stoploss")]
 
+        @staticmethod
+        def generate_estimator(dimensions, random_state=None, **kwargs):
+            """
+            Sampler selezionabile da env `RYLOS_SAMPLER`, default invariato.
+
+            Il default di freqtrade e' NSGAIIISampler, un genetico: parte da 30
+            individui casuali e li evolve per incroci. Il seed accodato e' UN
+            individuo fra quelli, e i suoi geni si diffondono solo dopo decine
+            di generazioni mescolandosi con individui casuali — per questo un
+            run seedato non "gira attorno" al candidato, nemmeno con i bound
+            stretti (misura 2026-07-31: a 810 epoch il miglior sfidante era a
+            9.7 punti dal seed, mediana della popolazione a 24 punti).
+
+            Alternative:
+            - TPESampler: bayesiano, modella cosa distingue le configurazioni
+              buone e campiona dove prevede miglioramenti. Converge sulle
+              regioni buone molto prima e gestisce nativamente i categorici.
+            - CmaEsCentered: CMA-ES con x0 sui default della strategia, cioe'
+              ricerca locale centrata sul candidato corrente. `RYLOS_SIGMA0`
+              regola il raggio (piccolo = piu' chirurgico). I categorici li
+              campiona in modo indipendente: congelarli (optimize=False) prima
+              di usarlo.
+            """
+            import os
+
+            name = os.environ.get("RYLOS_SAMPLER", "NSGAIIISampler")
+            if name != "CmaEsCentered":
+                return name
+
+            import optuna
+
+            x0 = {}
+            for dim in dimensions:
+                attr = getattr(RyLoSStrategy, dim.name, None)
+                value = getattr(attr, "value", attr)
+                if isinstance(value, bool) or not isinstance(value, int | float):
+                    continue
+                x0[dim.name] = value
+            return optuna.samplers.CmaEsSampler(
+                seed=random_state,
+                x0=x0,
+                sigma0=float(os.environ.get("RYLOS_SIGMA0", "0.12")),
+                n_startup_trials=1,
+                warn_independent_sampling=False,
+            )
+
     def leverage(
         self,
         pair: str,
