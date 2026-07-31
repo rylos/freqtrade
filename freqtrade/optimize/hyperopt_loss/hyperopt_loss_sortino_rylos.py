@@ -49,7 +49,11 @@ DD_MEAN_1PCT_SCALE = 10.0
 # Recovery (equity REALIZZATA: si muove a gradini di trade chiusi, quindi
 # soglie più larghe del limit 12gg mark-to-market di passivbot)
 RECOVERY_LOG_SCALE = 0.3
-MAX_RECOVERY_DAYS = 30.0
+# 30 -> 15 giorni (2026-07-31): col vecchio guardrail una configurazione con
+# 39 giorni consecutivi sott'acqua pagava quasi quanto una da 15 (epoch 436
+# del run seedato). Il tempo sott'acqua è la metrica di "stuck" più vicina
+# all'esperienza reale di chi guarda il conto, e va discriminata.
+MAX_RECOVERY_DAYS = 15.0
 RECOVERY_GUARDRAIL_SCALE = 0.1
 # Cap alle penalità recovery/held: puniscono (piu' di qualsiasi singolo
 # premio) ma non possono dominare la ricerca annegando l'asse crescita
@@ -61,10 +65,18 @@ RECOVERY_PENALTY_CAP = 8.0
 # col cap a 8 la penalità held valeva ~1.7 punti contro i ~18 del premio
 # profitto: l'asse anti-bag era di fatto scollegato dalla ricerca.
 # Nuove soglie dentro il dominio osservato, cap alzato perché possa mordere.
-HELD_PENALTY_CAP = 15.0
-MAX_POSITION_HELD_DAYS = 4.0
+# ⚠️ TARATURA (correzione 2026-07-31, dopo l'epoch 436): il premio profitto è
+# log(profit)*4, quindi 8x di profitto valgono appena ~8 punti. Con le penalità
+# temporali che oscillavano di 7.4 punti, la loss barattava un rendimento 8
+# volte superiore per una coda corta — non è "un po' di profitto". Le penalità
+# durata devono restare un TIE-BREAKER fra configurazioni comparabili: swing
+# totale ~1.6 punti = accetta al massimo ~1.5x di profitto in meno per una
+# coda pulita. Con questi valori il seed 5371 paga 2.47 punti contro gli 0.83
+# di una config a coda corta.
+HELD_PENALTY_CAP = 4.0
+MAX_POSITION_HELD_DAYS = 6.0
 HELD_DAYS_PENALTY_SCALE = 0.6
-HELD_DAYS_GUARDRAIL_SCALE = 0.4
+HELD_DAYS_GUARDRAIL_SCALE = 0.05
 # Coda delle durate: il max da solo è un singolo trade, non dice quanto
 # capitale resta immobilizzato. Questo termine pesa la quota di ORE-TRADE
 # spese oltre TAIL_DAYS_THRESHOLD sul totale (5371: 17.5%).
@@ -72,7 +84,7 @@ HELD_DAYS_GUARDRAIL_SCALE = 0.4
 # valgono -228k USDT, il -9.4% del P&L — la coda lunga distrugge valore,
 # tutto il rendimento viene dai 736 trade chiusi entro 24h.
 TAIL_DAYS_THRESHOLD = 3.0
-TAIL_HOURS_SHARE_SCALE = 12.0
+TAIL_HOURS_SHARE_SCALE = 2.0
 # Scalping: reward frequenza rafforzato + penalità durata media oltre 5h
 MAX_AVG_DURATION_HOURS = 5.0
 DURATION_PENALTY_SCALE = 1.0
