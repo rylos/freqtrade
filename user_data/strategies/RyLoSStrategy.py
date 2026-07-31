@@ -61,6 +61,17 @@ class RyLoSStrategy(IStrategy):
         0.001, 0.010, default=0.005, space="buy", optimize=True
     )
 
+    # ===== IDEA 3 — unstuck bidirezionale (ri-entrata sullo spazio liberato) =====
+    # Ogni clip di unstuck libera capacità sotto il TWE, ma oggi resta
+    # inutilizzabile: a griglia esaurita non si ricompra più. Con reentry
+    # attivo la capacità torna disponibile quando l'esposizione è scesa sotto
+    # reentry_exposure, alle stesse condizioni di trailing entry dei DCA.
+    # Default OFF.
+    reentry_enabled = CategoricalParameter(
+        [True, False], default=False, space="buy", optimize=True
+    )
+    reentry_exposure = DecimalParameter(0.30, 0.90, default=0.60, space="buy", optimize=True)
+
     # Ancoraggio EMA per il primo ordine (passivbot initial_ema_dist):
     # entra solo se il prezzo è sotto EMA * (1 + dist), dist negativa
     initial_ema_dist = DecimalParameter(-0.02, 0.0, default=-0.011, space="buy", optimize=True)
@@ -136,6 +147,41 @@ class RyLoSStrategy(IStrategy):
     # Anti-bag: oltre questi giorni la posizione è considerata stuck comunque
     unstuck_max_held_days = IntParameter(5, 20, default=16, space="sell", optimize=True)
 
+    # ===== IDEA 1 — isteresi dell'unstuck =====
+    # L'unstuck arma a unstuck_threshold e si disarma appena sotto: sul trade
+    # live del 27/07 si è fermato a exposure 0.668 vs soglia 0.681, cioè col
+    # bag ancora al 98% del tetto. Con release_ratio < 1 continua a limare
+    # finché l'esposizione non scende a threshold * release_ratio.
+    # Default 1.0 = comportamento storico (arma e disarma alla stessa soglia).
+    unstuck_release_ratio = DecimalParameter(
+        0.5, 1.0, default=1.0, space="sell", optimize=True
+    )
+
+    # ===== IDEA 2 — harvest a griglia esaurita =====
+    # Chiusa la griglia non resta nulla che monetizzi le oscillazioni: il
+    # close_grid lavora sul markup dalla MEDIA, che un bag sott'acqua non
+    # rivede per giorni. Qui il markup è sull'ULTIMO fill (il carico più
+    # basso), così ogni rimbalzo locale può alleggerire la posizione.
+    # Default OFF.
+    harvest_enabled = CategoricalParameter(
+        [True, False], default=False, space="sell", optimize=True
+    )
+    harvest_markup_pct = DecimalParameter(
+        0.005, 0.05, default=0.02, space="sell", optimize=True
+    )
+    harvest_qty_pct = DecimalParameter(0.05, 0.40, default=0.15, space="sell", optimize=True)
+
+    # ===== IDEA 4 — ancoraggio del guard-stoploss =====
+    # freqtrade fissa lo stop sul prezzo della PRIMA entry e non lo sposta:
+    # dopo i DCA la media scende sotto quel prezzo e lo stop effettivo vale
+    # meno del parametro ottimizzato (trade live 3: -62% dello stake invece
+    # del -72% nominale). "average" lo ri-ancora alla media a ogni fill.
+    # Default "first_entry" = comportamento storico.
+    stoploss_anchor = CategoricalParameter(
+        ["first_entry", "average"], default="first_entry", space="sell", optimize=True
+    )
+    use_custom_stoploss = True
+
     # Trailing stop statico disabilitato: sostituito dal trailing close passivbot
     trailing_stop = False
 
@@ -152,6 +198,7 @@ class RyLoSStrategy(IStrategy):
     _extremes_cache: dict = {}
     _fill_cache: dict = {}
     _last_unstuck: dict = {}
+    _last_harvest: dict = {}
     _max_orders_cache: int | None = None
 
     class HyperOpt:
@@ -406,7 +453,16 @@ class RyLoSStrategy(IStrategy):
                 exposure_ratio = (
                     trade.stake_amount * 4 / per_pair_limit if per_pair_limit > 0 else 0.0
                 )
-                is_stuck = exposure_ratio >= self.unstuck_threshold.value
+                # IDEA 1 — isteresi: se l'unstuck ha già limato questo trade,
+                # la soglia di rilascio è più bassa di quella di innesco, così
+                # le clip continuano finché il bag è davvero rientrato.
+                # release_ratio 1.0 = soglia unica (comportamento storico).
+                trigger = self.unstuck_threshold.value * (
+                    self.unstuck_release_ratio.value
+                    if trade.id in self._last_unstuck
+                    else 1.0
+                )
+                is_stuck = exposure_ratio >= trigger
             if is_stuck:
                 # Cooldown dedicato tra clip (limita anche il numero di ordini)
                 last_unstuck = self._last_unstuck.get(trade.id)
@@ -435,6 +491,35 @@ class RyLoSStrategy(IStrategy):
                                     -reduce_stake,
                                     f"unstuck_{held_days:.1f}d_{current_profit * 100:.1f}%",
                                 )
+
+        # ===== HARVEST (idea 2): monetizza le oscillazioni del bag =====
+        # Solo a griglia esaurita, dove non esistono più né DCA né clip in
+        # profitto. Il markup è sull'ultimo fill (il carico più basso), non
+        # sulla media: un bag sott'acqua la media non la rivede per giorni.
+        # Stesso budget di perdita per clip dell'unstuck.
+        if self.harvest_enabled.value and current_rate >= last_order_price * (
+            1 + self.harvest_markup_pct.value
+        ):
+            if total_balance is None:
+                total_balance = self.wallets.get_total_stake_amount()
+            if n_entries > self.calculate_max_orders(total_balance):
+                last_harvest = self._last_harvest.get(trade.id)
+                harvest_wait = timedelta(
+                    minutes=timeframe_to_minutes(self.timeframe) * self.UNSTUCK_COOLDOWN_CANDLES
+                )
+                if last_harvest is None or (current_time - last_harvest) >= harvest_wait:
+                    reduce_stake = trade.stake_amount * self.harvest_qty_pct.value
+                    remaining = trade.stake_amount - reduce_stake
+                    if min_stake and remaining < min_stake * 2:
+                        reduce_stake = trade.stake_amount
+                    estimated_loss = reduce_stake * max(0.0, -current_profit)
+                    if (
+                        estimated_loss
+                        <= total_balance * self.unstuck_loss_allowance_pct.value
+                    ):
+                        self._last_harvest[trade.id] = current_time
+                        markup = (current_rate - last_order_price) / last_order_price
+                        return -reduce_stake, f"harvest_{markup * 100:.1f}%"
 
         # Calcola perdita dall'ultimo DCA filled (non dalla media)
         current_loss_from_last = (current_rate - last_order_price) / last_order_price
@@ -498,8 +583,18 @@ class RyLoSStrategy(IStrategy):
                     return emergency_stake, f"emergency_dca_{loss_pct:.1f}%"
 
         # Se abbiamo raggiunto il numero massimo di ordini per questa pair
+        # IDEA 3 — unstuck bidirezionale: le clip hanno liberato spazio sotto
+        # il TWE; se l'esposizione è rientrata abbastanza, quello spazio torna
+        # comprabile invece di restare congelato fino alla chiusura del trade.
+        reentry = False
         if n_entries > max_orders:
-            return None
+            if (
+                self.reentry_enabled.value
+                and exposure_ratio <= self.reentry_exposure.value
+            ):
+                reentry = True
+            else:
+                return None
 
         # Verifica se abbiamo raggiunto il limite globale
         if current_global_exposure >= global_limit * 0.95:  # 95% del limite per sicurezza
@@ -513,6 +608,13 @@ class RyLoSStrategy(IStrategy):
         entry_count = n_entries
         next_stake_pct = self.first_order_pct.value * (self.dca_multiplier.value**entry_count)
         next_stake = total_balance * next_stake_pct
+
+        if reentry:
+            # Ri-entrata: si compra solo lo spazio liberato dalle clip, non la
+            # progressione geometrica (che a griglia esaurita sfonderebbe il TWE)
+            next_stake = max(0.0, (per_pair_limit - current_position_value) / 4)
+            if min_stake and next_stake < min_stake:
+                return None
 
         # Verifica se available_balance è sufficiente
         if next_stake > available_balance:
@@ -561,7 +663,40 @@ class RyLoSStrategy(IStrategy):
         if bounce_from_low < self.dca_trailing_retracement_pct.value:
             return None
 
-        return next_stake, f"dca_{entry_count + 1}_{current_profit * 100:.1f}%"
+        prefix = "reentry" if reentry else "dca"
+        return next_stake, f"{prefix}_{entry_count + 1}_{current_profit * 100:.1f}%"
+
+    def custom_stoploss(
+        self,
+        pair: str,
+        trade: Trade,
+        current_time,
+        current_rate: float,
+        current_profit: float,
+        after_fill: bool,
+        **kwargs,
+    ) -> float | None:
+        """
+        IDEA 4 — ri-ancoraggio del guard-stoploss alla media.
+
+        freqtrade fissa lo stop sul prezzo della PRIMA entry e non lo sposta
+        più (il livello può solo salire). Dopo i DCA la media scende sotto
+        quel prezzo, quindi lo stop effettivo è più stretto del parametro
+        ottimizzato: sul trade live del 27/07 vale -62% dello stake invece
+        del -72% nominale. Con anchor="average" lo stop viene ricalcolato
+        sulla media a ogni fill; `after_fill` è l'unico contesto in cui
+        freqtrade consente di allargare la distanza (doc: strategy-callbacks).
+
+        Il valore restituito è relativo a current_rate, e adjust_stop_loss lo
+        applica come current_rate * (1 - |x| / leva): si inverte per ottenere
+        il prezzo di stop voluto.
+        """
+        if not after_fill or self.stoploss_anchor.value != "average":
+            return None
+        target = trade.open_rate * (1 - abs(self.stoploss) / 4)
+        if current_rate <= target:
+            return None
+        return -abs(1 - target / current_rate) * 4
 
     def populate_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
         # Oscillatore 4RSI di RyLoS: avg(RSI2, RSI7, RSI14) - 50
