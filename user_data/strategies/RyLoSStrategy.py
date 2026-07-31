@@ -70,9 +70,9 @@ class RyLoSStrategy(IStrategy):
     # era acceso nell'86.5% del top-200 — indizio non conclusivo (stessa firma
     # dell'esperimento ER, che all'A/B risultò inerte), va falsificato.
     reentry_enabled = CategoricalParameter(
-        [True, False], default=False, space="buy", optimize=True
+        [True, False], default=False, space="buy", optimize=False
     )
-    reentry_exposure = DecimalParameter(0.30, 0.90, default=0.60, space="buy", optimize=True)
+    reentry_exposure = DecimalParameter(0.30, 0.90, default=0.60, space="buy", optimize=False)
 
     # Ancoraggio EMA per il primo ordine (passivbot initial_ema_dist):
     # entra solo se il prezzo è sotto EMA * (1 + dist), dist negativa
@@ -118,12 +118,12 @@ class RyLoSStrategy(IStrategy):
     # supera il markup dal prezzo medio — è il meccanismo che tiene corte
     # le durate (position_held_days_max ~7gg nel BT dd39)
     close_grid_enabled = CategoricalParameter(
-        [True, False], default=False, space="sell", optimize=True
+        [True, False], default=False, space="sell", optimize=False
     )
     close_grid_markup_pct = DecimalParameter(
-        0.002, 0.030, default=0.025, space="sell", optimize=True
+        0.002, 0.030, default=0.025, space="sell", optimize=False
     )
-    close_grid_qty_pct = DecimalParameter(0.10, 0.60, default=0.269, space="sell", optimize=True)
+    close_grid_qty_pct = DecimalParameter(0.10, 0.60, default=0.269, space="sell", optimize=False)
     # Dopo questo numero di clip, il trigger successivo chiude tutto:
     # evita il "moncherino" che resta aperto per settimane
     CLOSE_GRID_MAX_CLIPS = 2
@@ -134,7 +134,7 @@ class RyLoSStrategy(IStrategy):
     # candele) non fa in tempo a scalare la posizione prima del ritraccio.
     # Default OFF: i candidati del run 2026-07-21 restano identici.
     profit_lock_enabled = CategoricalParameter(
-        [True, False], default=True, space="sell", optimize=True
+        [True, False], default=True, space="sell", optimize=False
     )
     profit_lock_threshold = DecimalParameter(0.10, 0.22, default=0.156, space="sell", optimize=True)
     profit_lock_qty_pct = DecimalParameter(0.8, 1.0, default=0.97, space="sell", optimize=True)
@@ -172,7 +172,7 @@ class RyLoSStrategy(IStrategy):
     # chiusi entro 24h valgono il +102%. La coda lunga distrugge valore.
     # Default OFF = comportamento storico.
     time_exit_enabled = CategoricalParameter(
-        [True, False], default=True, space="sell", optimize=True
+        [True, False], default=True, space="sell", optimize=False
     )
     time_exit_days = IntParameter(3, 8, default=4, space="sell", optimize=True)
     # Frazione di stake scaricata a ogni trigger. 1.0 = chiusura secca (il
