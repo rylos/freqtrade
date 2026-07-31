@@ -39,13 +39,24 @@ PROFIT_SCALE = 4.0
 # oltre 40% — "un dd max oltre 40% non lo selezionero' mai, anche se ha
 # valori ottimi": penalità flat 50 punti (> di qualsiasi score raggiungibile,
 # che al massimo vale ~28) + rampa, così nessun profitto può comprarla.
-DD_FREE_THRESHOLD = 0.30
+# Soglia gratuita abbassata 0.30 -> 0.15 (2026-07-31): col vecchio valore il
+# termine drawdown era ESATTAMENTE ZERO per tutti i candidati reali (underwater
+# 19.15% su 5371, T4 e T4G), quindi la loss era cieca su questo asse. Resta la
+# semantica di vincolo — morbido oltre soglia, squalifica oltre il 40%.
+DD_FREE_THRESHOLD = 0.15
 DD_SOFT_SCALE = 20.0
 MAX_RELATIVE_DRAWDOWN = 0.40
 DD_DISQUALIFY_FLAT = 50.0
 DD_DISQUALIFY_RAMP = 200.0
 DD_1PCT_FREE_THRESHOLD = 0.20
 DD_MEAN_1PCT_SCALE = 10.0
+# Drawdown di CONTO (episodio peggiore in assoluto, `relative=False`): è la
+# metrica che distingue davvero i candidati, mentre l'underwater relativo è
+# dominato da un episodio dei primi mesi ed è identico per tutti (19.15%).
+# Misura 2026-07-31: 5371 8.57%, T4 secco 8.84%, T4G graduale 4.66%.
+# Termine lineare da zero: 1 punto percentuale di dd = 0.2 punti di objective,
+# cioè circa il 5% di profitto (il premio profitto è log*4).
+DD_ACCOUNT_SCALE = 20.0
 # Recovery (equity REALIZZATA: si muove a gradini di trade chiusi, quindi
 # soglie più larghe del limit 12gg mark-to-market di passivbot)
 RECOVERY_LOG_SCALE = 0.3
@@ -145,8 +156,18 @@ class SortinoRyLoSHyperOptLoss(IHyperOptLoss):
             max_dd = drawdown.relative_account_drawdown
         except ValueError:
             max_dd = 0.0
-        # Gratis fino al 30%, morbida 30-40%, squalifica oltre 40%
+        # Drawdown di conto: episodio peggiore in valore assoluto (relative=False).
+        # Continuo da zero, è l'asse su cui i candidati si distinguono davvero.
+        try:
+            dd_account = calculate_max_drawdown(
+                results, starting_balance=starting_balance, relative=False
+            ).relative_account_drawdown
+        except ValueError:
+            dd_account = 0.0
+
+        # Gratis fino alla soglia, morbida fino al 40%, squalifica oltre
         dd_penalty = max(0.0, max_dd - DD_FREE_THRESHOLD) * DD_SOFT_SCALE
+        dd_penalty += dd_account * DD_ACCOUNT_SCALE
         if max_dd > MAX_RELATIVE_DRAWDOWN:
             dd_penalty += DD_DISQUALIFY_FLAT + (max_dd - MAX_RELATIVE_DRAWDOWN) * DD_DISQUALIFY_RAMP
         dd_penalty += max(0.0, dd_mean_1pct - DD_1PCT_FREE_THRESHOLD) * DD_MEAN_1PCT_SCALE
