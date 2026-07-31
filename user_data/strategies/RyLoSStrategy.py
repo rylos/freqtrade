@@ -175,6 +175,15 @@ class RyLoSStrategy(IStrategy):
         [True, False], default=True, space="sell", optimize=True
     )
     time_exit_days = IntParameter(3, 8, default=4, space="sell", optimize=True)
+    # Frazione di stake scaricata a ogni trigger. 1.0 = chiusura secca (il
+    # comportamento originale). Valori bassi = scarico graduale: alla soglia
+    # riduci una fetta, ripeti ogni TIME_EXIT_COOLDOWN_H, e chiudi tutto solo
+    # al tetto duro (time_exit_days * TIME_EXIT_HARD_MULT), che evita il bag
+    # zombie. Motivazione: 19 dei 25 trade oltre 3 giorni del 5371 chiudono
+    # in profitto — la chiusura secca butta via anche quelli che recuperano.
+    time_exit_qty_pct = DecimalParameter(0.2, 1.0, default=0.25, space="sell", optimize=True)
+    TIME_EXIT_COOLDOWN_H = 24
+    TIME_EXIT_HARD_MULT = 2.0
 
     # ===== IDEA 1 — isteresi dell'unstuck =====
     # L'unstuck arma a unstuck_threshold e si disarma appena sotto: sul trade
@@ -235,6 +244,7 @@ class RyLoSStrategy(IStrategy):
     _fill_cache: dict = {}
     _last_unstuck: dict = {}
     _last_harvest: dict = {}
+    _last_time_exit: dict = {}
     _max_orders_cache: int | None = None
 
     class HyperOpt:
@@ -476,6 +486,33 @@ class RyLoSStrategy(IStrategy):
                     -reduce_stake,
                     f"tp_grid_{price_markup * 100:.2f}%",
                 )
+
+        # ===== TIME EXIT: scarico del bag per anzianità =====
+        # Prima dell'unstuck: agisce a prescindere da EMA e budget di perdita,
+        # è l'unico meccanismo che porta davvero a zero un bag vecchio.
+        if self.time_exit_enabled.value:
+            held_days = (current_time - trade.open_date_utc).total_seconds() / 86400
+            if held_days >= self.time_exit_days.value:
+                last_te = self._last_time_exit.get(trade.id)
+                if last_te is None or (current_time - last_te) >= timedelta(
+                    hours=self.TIME_EXIT_COOLDOWN_H
+                ):
+                    hard = (
+                        held_days
+                        >= self.time_exit_days.value * self.TIME_EXIT_HARD_MULT
+                    )
+                    # Filtro di timing: sotto il tetto duro aspetta un momento
+                    # di forza invece di scaricare sul minimo di una rossa
+                    pct = 1.0 if hard else self.time_exit_qty_pct.value
+                    reduce_stake = trade.stake_amount * pct
+                    remaining = trade.stake_amount - reduce_stake
+                    if min_stake and remaining < min_stake * 2:
+                        reduce_stake = trade.stake_amount
+                    self._last_time_exit[trade.id] = current_time
+                    return (
+                        -reduce_stake,
+                        f"time_exit_{held_days:.1f}d_{current_profit * 100:.1f}%",
+                    )
 
         # ===== UNSTUCK (passivbot): riduzione parziale della posizione stuck =====
         if current_profit < 0:
@@ -833,14 +870,6 @@ class RyLoSStrategy(IStrategy):
                     )
                     if max_since_open >= threshold_price and current_rate <= retracement_price:
                         return f"sell_trailing_close_{current_profit * 100:.1f}%"
-
-        # ===== TIME EXIT: chiude il bag per anzianità =====
-        # Va PRIMA degli altri exit condizionati al profitto: è l'unico che
-        # chiude anche in perdita, e senza di lui l'unstuck lima all'infinito.
-        if self.time_exit_enabled.value:
-            held_days = (current_time - trade.open_date_utc).total_seconds() / 86400
-            if held_days >= self.time_exit_days.value:
-                return f"time_exit_{held_days:.1f}d_{current_profit * 100:.1f}%"
 
         # ===== 4RSI Overbought Exit (istogramma continuo) =====
         if current_profit > self.min_profit_for_overbought_exit.value:
