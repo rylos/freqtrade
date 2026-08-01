@@ -1,0 +1,42 @@
+{
+  "strategy_name": "RyLoSStrategy",
+  "params": {
+    "buy": {
+      "dca_atr_multiplier": 1.657,
+      "dca_distance": 0.01,
+      "dca_multiplier": 2.725,
+      "dca_trailing_retracement_pct": 0.005,
+      "dca_we_weight": 0.243,
+      "emergency_critical_multiplier": 1.293,
+      "emergency_dca_threshold": -0.069,
+      "entry_stoch_os": 36.427,
+      "first_order_pct": 0.066,
+      "initial_ema_dist": -0.011,
+      "osc_entry_threshold": -9.865,
+      "total_wallet_exposure_limit": 2.945
+    },
+    "sell": {
+      "close_trailing_retracement_pct": 0.004,
+      "close_trailing_threshold_pct": 0.013,
+      "exit_stoch_ob": 73.056,
+      "min_profit_for_overbought_exit": 0.041,
+      "osc_exit_threshold": 24.894,
+      "profit_lock_qty_pct": 0.977,
+      "profit_lock_threshold": 0.161,
+      "time_exit_days": 4,
+      "time_exit_qty_pct": 0.201,
+      "unstuck_age_scaling": 0.056,
+      "unstuck_close_pct": 0.057,
+      "unstuck_ema_dist": -0.005,
+      "unstuck_loss_allowance_pct": 0.007,
+      "unstuck_max_held_days": 14,
+      "unstuck_release_ratio": 0.999,
+      "unstuck_threshold": 0.686
+    },
+    "stoploss": {
+      "stoploss": -0.721
+    }
+  },
+  "ft_stratparam_v": 1,
+  "export_time": "2026-08-01"
+}
