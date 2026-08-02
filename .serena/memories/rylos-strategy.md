@@ -135,7 +135,30 @@ Nato dal trade 3 live (griglia esaurita in 4h20, poi giorni fermo mentre il prez
 - Taratura corretta: `HELD_PENALTY_CAP` 4, `MAX_POSITION_HELD_DAYS` 6, `HELD_DAYS_GUARDRAIL_SCALE` 0.05, `TAIL_HOURS_SHARE_SCALE` 2.0, `MAX_RECOVERY_DAYS` 15. Swing ~1,6 punti = tie-breaker fra configurazioni comparabili, tollera al massimo ~1,5x di profitto in meno
 - Nuovo termine `TAIL_HOURS_SHARE_SCALE`: quota di ORE-TRADE oltre 3 giorni sul monte-ore totale (5371: 17,5%) — il max_held guarda un solo trade, questo misura quanto capitale resta immobilizzato
 
-## Run in corso (2026-07-31 12:28)
+## ⭐ CANDIDATO LIVE: T4G (dal 2026-07-31, tag `rylos-t4g-baseline`)
+**5371 + time exit a scarico graduale**: dal 4° giorno riduce il 25% dello stake ogni 24h, chiusura totale al tetto duro di 8 giorni. Params in `user_data/candidates/t4g_2026-07-31.json` (md5 `23baf272dbd3e40fb17e9945f3bf6c75`).
+Backtest 20241205-20260731 (wallet 10k): **842 trade, +20.579,05%, dd conto 4,66%, underwater 19,15%, win 97,1%, max holding 8,0gg, durata media 10:48**. Objective −36,25841.
+Ambiente consolidato 2026-08-02 (commit `866a0de7f9`): pc-work, debian e amazon allineati, `.py` md5 `857bccc947ca8b4f8ffabc6b507be982` su tutte e tre.
+
+## Run CMA-ES: vincitore SCARTATO (2026-08-01)
+9.990 epoch, 6.000 battono il seed. Vincitore **ep9981** (−36,776, +23.372%, dd 5,23%) — sembra +13,6% di profitto per mezzo punto di dd, ma **lo spezzatino lo squalifica**:
+| periodo | T4G | ep9981 |
+|---|---|---|
+| 2025 H1 | +686% | +804% |
+| 2025 H2 | +103% | +104% |
+| **2026 H1** | **+205%** | **+170%** |
+| ultimi 2 mesi | +37,4% | +39,2% |
+Tutto il vantaggio è nel 2025 H1 e nel semestre recente fa il **17% peggio**: sfrutta una particolarità storica, non una regolarità. Alternativa prudente **ep1756** (−36,274, +19.963%, dd 4,22%) che segue il T4G ovunque con dd migliore. Entrambi in `user_data/candidates/`.
+**I tre migliori candidati convergono indipendentemente su**: `time_exit_qty_pct` ~0,20 (invece di 0,25), `unstuck_age_scaling` 0,06-0,11 (accendono la clip progressiva con l'età), `unstuck_max_held_days` 14. È la direzione che l'optimizer indica in modo consistente.
+
+## ⚠️ Il RAGGIO conta più del sampler (lezione 2026-07-31/08-01)
+Tre metodologie a confronto sullo stesso seed, stesso spazio, stessa loss:
+- **NSGA-III** (default freqtrade, genetico): a 810 epoch gap 9,72 dal seed. Parte da 30 individui casuali e li evolve per incroci — il seed è 1 su 30 e i suoi geni si diffondono in decine di generazioni. **Un run seedato NON gira attorno al candidato**, nemmeno coi bound stretti
+- **TPE** (bayesiano): gap 12,09 a 270 epoch → 4,32 a 3.060, poi piatto. Converge meglio ma non entra nel vicinato
+- **CMA-ES centrato** (`x0` = default strategia): con `sigma0=0.10` era PEGGIO di TPE (7,61 a 1.170) — perturbare 20 parametri del 10% ciascuno porta lontano comunque, è la dimensionalità. Con **`sigma0=0.03`**: gap 2,81 a 180 epoch e 4 candidati entro 5 punti (TPE ne aveva 1 in 3.060)
+**Selezione via `HyperOpt.generate_estimator` + env `RYLOS_SAMPLER`** (default NSGAIIISampler invariato): `TPESampler` o `CmaEsCentered` (+ `RYLOS_SIGMA0`). Coi categorici CMA-ES lavora male → congelarli prima (`optimize=False`), poi riaprirli.
+
+## Run precedenti (2026-07-31)
 tmux `ft-hyperopt` su debian, 10k epoch, `--spaces buy sell stoploss`, **range 20241205-20260731** (esteso, objective NON confrontabile col vecchio −43,068), -j 30, ~14 epoch/min. **Seed = 5371 + time_exit 4g, objective −40,30442**. Interruttore `hyperopt_seed_defaults` nel config (default true) per i run ciechi: `user_data/config_noseed.json` come secondo `-c`.
 - Due run ciechi su due finiti in bacini inferiori (best −37,75 contro il seed a −40,30): **il seeding non è opzionale**
 
