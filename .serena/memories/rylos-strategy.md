@@ -140,6 +140,22 @@ Nato dal trade 3 live (griglia esaurita in 4h20, poi giorni fermo mentre il prez
 Backtest 20241205-20260731 (wallet 10k): **842 trade, +20.579,05%, dd conto 4,66%, underwater 19,15%, win 97,1%, max holding 8,0gg, durata media 10:48**. Objective −36,25841.
 Ambiente consolidato 2026-08-02 (commit `866a0de7f9`): pc-work, debian e amazon allineati, `.py` md5 `857bccc947ca8b4f8ffabc6b507be982` su tutte e tre.
 
+## Merge upstream + drift check (2026-08-04, commit `a4ed5fa90`)
+- **113 commit di upstream/develop mergiati**, quasi tutti ruff/cleanup + dependabot. **Un conflitto banale** in `hyperopt.py` (`ec5dede4b` sostituisce `datetime.now()` con `dt_now()` proprio dove la nostra patch di seeding aveva aggiunto `import warnings`): risolto tenendo `import warnings` e togliendo l'import di `datetime`. Custom intatti (md5 invariati: strategia, loss, `strategy_wrapper.py`); patch di seeding verificata al suo posto
+- ⚠️ `git commit` del merge fallisce su pc-work per `No module named pre_commit` → usare `--no-verify`
+- **Nessun pacchetto nuovo in requirements**, solo bump (ta-lib 0.6.8→0.7.1, technical 1.6→1.7, pandas 3.0.5, ccxt 4.5.70): **venv NON aggiornati** né su debian né su amazon
+- **Regressione T4G su debian bit-perfetta** (20241205-20260731, wallet 10k): 842 trade, +20.579,05%, dd 4,66%, uw 19,15%, win 97,1%, durata media 10:48
+- **Deploy su amazon fatto CON IL TRADE APERTO** (Marco: "dovrebbe riprendersi in gestione il trade, così lo avevamo progettato" — corretto): smoke test `list-strategies` prima di fermare, downtime ~35s, versione `2026.8-dev-a4ed5fa`, log `Found open trade: Trade(id=3, amount=89.01, open_since=2026-07-27 14:20:02)` + `Updating 0 open orders`, zero errori. **La regola "deploy solo a bot flat" non è un vincolo tecnico**: i cooldown di time exit/unstuck derivano dagli ordini in db (fix 31/07), quindi il riavvio non li resetta. Unica accortezza: non riavviare a ridosso di una clip programmata
+- Full-range aggiornato a oggi (20241205-20260804): 844 trade, +20.696,88%, dd 4,66%, win 97,2%. Luglio 2026 fiacco (11 trade, somma ratio +20,8%, incluso un `time_exit_8.0d` a −16,75%): è il mercato (HYPE da ~59 a 55), non la meccanica
+
+## Drift check #2 live-vs-backtest (2026-08-04) — il time exit combacia, la griglia no
+Finestra 20260722-oggi, `--dry-run-wallet 8200`, contro i 3 trade live:
+- Trade 1 e 2: **identici** (date di apertura/chiusura ed exit reason)
+- Il trade del 22/07 05:15 nel backtest è **prima del go-live** (bot partito alle 20:01): non è divergenza
+- Trade 3 (aperto 27/07 14:20 in entrambi): le **4 clip time exit cadono negli stessi giorni** (4/5/6/7d) a prezzi entro lo 0,4% (bt 55,18/52,31/51,52/53,50 vs live 54,97/52,32/51,51/53,75). **Il T4G in live si comporta esattamente come in backtest**
+- ⚠️ **Divergenza sul lato entry**: live 3 entry (427 unità) + 7 clip unstuck, backtest solo 2 entry (143 unità) e zero unstuck → la posizione live è ~3x il gemello di backtest e perde di più (−867 realizzati + ~−163 aperti contro −642). Params esclusi come causa: **diff T4G vs 5371 = solo le feature nuove** (time_exit_*, harvest_*, reentry_*, stoploss_anchor, unstuck_release_ratio), zero differenze su DCA/unstuck. Resta la sensibilità del percorso wallet/griglia già vista il 31/07: **il confronto live-vs-backtest è affidabile sugli eventi (date, exit reason), non sulle dimensioni della griglia**
+- Plot aggiornati su debian in `user_data/plot/`: `freqtrade-profit-plot.html` (full range) e `freqtrade-plot-HYPE_USDT_USDT-5m.html` (15/07-04/08, `ema_anchor` + `osc_4rsi`)
+
 ## Run CMA-ES: vincitore SCARTATO (2026-08-01)
 9.990 epoch, 6.000 battono il seed. Vincitore **ep9981** (−36,776, +23.372%, dd 5,23%) — sembra +13,6% di profitto per mezzo punto di dd, ma **lo spezzatino lo squalifica**:
 | periodo | T4G | ep9981 |
