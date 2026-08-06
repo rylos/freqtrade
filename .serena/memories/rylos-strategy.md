@@ -157,6 +157,12 @@ Finestra 20260722-oggi, `--dry-run-wallet 8200`, contro i 3 trade live:
 - ⚠️ **Il trade 3 è stato chiuso A MANO da Marco** il 2026-08-04 12:02:28 UTC con `/fx all` da Telegram (`force_exit`, 89,01 unità a 55,426), ~2,5h prima della chiusura automatica a 8 giorni: totale trade −1.020,00 USDT (−16,72%). **Nei confronti futuri live-vs-backtest quel trade NON va letto come divergenza della strategia** (il backtest lo chiuderebbe con `time_exit_8.0d`). Bilancio live da go-live: +125,47 +90,32 −1.020,00 = **−804,21 USDT** ≈ −9,8% sugli 8.200 iniziali
 - Plot aggiornati su debian in `user_data/plot/`: `freqtrade-profit-plot.html` (full range) e `freqtrade-plot-HYPE_USDT_USDT-5m.html` (15/07-04/08, `ema_anchor` + `osc_4rsi`)
 
+## Stato live 2026-08-06 — flat da due giorni, confermato dal backtest
+- Bot **su e sano** su amazon (`2026.8-dev-a4ed5fa`, PID 156300, heartbeat regolari, zero errori nel buffer tmux). **Flat dal 04/08 12:02** (chiusura manuale del trade 3): nessun trade nuovo in ~45h, db sempre a 3 trade, slot libero
+- **Backtest di controllo 20260804- con `--dry-run-wallet 7333`** (debian a `a4ed5fa90`, `.py` md5 `857bccc9…` = T4G, nessun json fantasma): **zero trade** anche in backtest → il flat è il mercato (HYPE laterale 55-56), non un malfunzionamento. Dati HYPE 5m riscaricati fino al 06/08 (erano fermi al 04/08 13:00)
+- ⚠️ **Il P&L del db non è il bilancio**: saldo Bybit reale **7.333,10 USDT** contro 8.200 di partenza = **−866,90 (−10,6%)**, mentre la somma dei `realized_profit` dei 3 trade è −804,21. La differenza **~62,7 USDT è funding** (il trade 3 ha tenuto ~24k di nozionale per 8 giorni). **Nei bilanci futuri leggere il saldo dell'exchange via ccxt `fetch_balance`, non solo il db**
+- Nota di navigazione: il progetto **passivbot è separato** (nota wiki `passivbot`, bot `ry`/`ry-hl`). Aggiornamenti recenti che si trovano lì (incidente fill same-ms Hyperliquid, chattering TWEL, watchdog + monitor Pareto + bot Telegram `Claude RyLoS Bot`) **non riguardano il freqtrade** e non vanno mescolati a queste memorie
+
 ## Run CMA-ES: vincitore SCARTATO (2026-08-01)
 9.990 epoch, 6.000 battono il seed. Vincitore **ep9981** (−36,776, +23.372%, dd 5,23%) — sembra +13,6% di profitto per mezzo punto di dd, ma **lo spezzatino lo squalifica**:
 | periodo | T4G | ep9981 |
