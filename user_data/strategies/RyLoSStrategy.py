@@ -78,11 +78,24 @@ class RyLoSStrategy(IStrategy):
     # momento del fill predice la discesa SUCCESSIVA al fill (rho -0.23,
     # parziale -0.23 controllando MAE/ATR/indice del fill; campione indipendente
     # -0.22 p=0.004; bootstrap a blocchi IC95% [-0.33,-0.08]; segno stabile
-    # nelle due metà del campione). Dove manca pressione in acquisto il prezzo
-    # scende ancora: si media più leggero, senza toccare distanze né cooldown
-    # (allargare le distanze è già stato bocciato due volte: ETRP-B e 9529).
+    # nelle due metà del campione), ed è ortogonale a quanto il prezzo è già
+    # sceso — al contrario del volume profile, che ne era solo un proxy.
+    #
+    # SOLO AL RIALZO. Lo scan ha bocciato la modulazione simmetrica (peso 0.2 ->
+    # 0.8: profitto in calo monotono 17.4k -> 14.1k contro 18.8k della baseline,
+    # underwater sempre 19.15% = costava senza ridurre il rischio; il controllo
+    # a peso negativo -0.4 faceva 14.2k, molto peggio, quindi il SEGNO era
+    # giusto e sbagliata la forma d'uso). Ridurre lo stake dove manca pressione
+    # toglie anche il beneficio di aver mediato quando il prezzo poi risale, e
+    # il 97% dei trade risale. Il diagnostico lo diceva: la separazione era
+    # quasi tutta nel terzile alto (discesa oltre il 5% nel 9% dei casi contro
+    # 29-30%), cioè "pressione alta = sicuro" più che "bassa = pericoloso".
+    # Solo-rialzo: 0.2 -> 18.6k, 0.4 -> 19.8k, 0.6 -> 20.4k, 0.8 -> 18.9k,
+    # 1.2 -> 14.4k. Il vantaggio regge a tutte e 7 le perturbazioni dei
+    # parametri strutturali (ref, finestra, periodo): mai sotto la baseline.
+    # Attesa onesta al netto del bias di selezione: +4-5%, dd e uw invariati.
     # Peso 0 = comportamento T4G invariato.
-    dca_tmf_weight = DecimalParameter(0.0, 0.8, default=0.0, space="buy", optimize=True)
+    dca_tmf_weight = DecimalParameter(0.0, 1.0, default=0.6, space="buy", optimize=True)
 
     # ===== IDEA 3 — unstuck bidirezionale (ri-entrata sullo spazio liberato) =====
     # Ogni clip di unstuck libera capacità sotto il TWE, ma oggi resta
@@ -789,19 +802,19 @@ class RyLoSStrategy(IStrategy):
         next_stake_pct = self.first_order_pct.value * (self.dca_multiplier.value**entry_count)
         next_stake = total_balance * next_stake_pct
 
-        # Modulazione con la pressione di volume: si carica di più dove il TMF
-        # è sopra il valore tipico dei fill DCA, di meno dove è sotto. Lo
-        # scostamento è limitato a +/-1 e il fattore resta in [0.2, 1.8], così
-        # la griglia continua a comprare agli stessi livelli (nessun ritardo).
+        # Modulazione con la pressione di volume: si carica di PIÙ dove il TMF è
+        # sopra il valore tipico dei fill DCA, mai di meno dove è sotto (lo
+        # scostamento è troncato a zero). La griglia continua a comprare agli
+        # stessi livelli e con almeno lo stesso stake: nessun ritardo, nessuna
+        # riduzione — solo un sovrappeso dove la discesa successiva è meno
+        # probabile. Il fattore resta in [1.0, 2.0].
         if self.dca_tmf_weight.value != 0:
             tmf_df, _ = self.dp.get_analyzed_dataframe(trade.pair, self.timeframe)
             if len(tmf_df) > 0:
                 deviation = float(tmf_df["tmf_z"].iat[-1]) - self.TMF_FILL_REFERENCE
-                deviation = max(-1.0, min(1.0, deviation))
+                deviation = max(0.0, min(1.0, deviation))
                 factor = 1.0 + self.dca_tmf_weight.value * deviation
-                next_stake *= max(0.2, min(1.8, factor))
-                if min_stake and next_stake < min_stake:
-                    next_stake = min_stake
+                next_stake *= max(1.0, min(2.0, factor))
 
         if reentry:
             # Ri-entrata: si compra solo lo spazio liberato dalle clip, non la
