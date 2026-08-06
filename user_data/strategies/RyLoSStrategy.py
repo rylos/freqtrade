@@ -1,5 +1,6 @@
+import numpy as np
 import talib.abstract as ta
-from pandas import DataFrame, Timestamp
+from pandas import DataFrame, Series, Timestamp
 from datetime import datetime, timedelta, timezone
 
 from freqtrade.strategy import (
@@ -27,7 +28,18 @@ class RyLoSStrategy(IStrategy):
     timeframe = "5m"
     can_short = False
     process_only_new_candles = True
-    startup_candle_count = 100  # warmup per EMA(68) e BB(20)
+    # Warmup: deve coprire la finestra di normalizzazione del TMF (576 candele +
+    # il periodo di Wilder), altrimenti in live il tmf_z resterebbe neutro mentre
+    # in backtest sarebbe pieno -> divergenza live/backtest
+    startup_candle_count = 750
+
+    # --- Twiggs Money Flow: parametri strutturali (non ottimizzati) ---
+    TMF_PERIOD = 50  # smorzamento di Wilder (miglior parziale nel diagnostico)
+    TMF_Z_WINDOW = 576  # 2 giorni di candele 5m per lo z-score mobile
+    # Valore tipico del tmf_z ai fill DCA: i DCA scattano per definizione in
+    # pressione sotto la media, quindi senza questo riferimento il peso
+    # ridurrebbe lo stake in modo SISTEMATICO invece che differenziale
+    TMF_FILL_REFERENCE = -0.5
     position_adjustment_enable = True
     # max_entry_position_adjustment rimosso - calcolato dinamicamente
     stoploss = -0.721  # guard-stoploss del candidato 5371 (rete di sicurezza; hyperopt lo ottimizza nello spazio stoploss)
@@ -60,6 +72,17 @@ class RyLoSStrategy(IStrategy):
     dca_trailing_retracement_pct = DecimalParameter(
         0.003, 0.008, default=0.005, space="buy", optimize=True
     )
+
+    # ===== Modulazione dello stake DCA con la pressione di volume (TMF) =====
+    # Diagnostico 2026-08-07 sui 229 fill DCA del T4G: il Twiggs Money Flow al
+    # momento del fill predice la discesa SUCCESSIVA al fill (rho -0.23,
+    # parziale -0.23 controllando MAE/ATR/indice del fill; campione indipendente
+    # -0.22 p=0.004; bootstrap a blocchi IC95% [-0.33,-0.08]; segno stabile
+    # nelle due metà del campione). Dove manca pressione in acquisto il prezzo
+    # scende ancora: si media più leggero, senza toccare distanze né cooldown
+    # (allargare le distanze è già stato bocciato due volte: ETRP-B e 9529).
+    # Peso 0 = comportamento T4G invariato.
+    dca_tmf_weight = DecimalParameter(0.0, 0.8, default=0.0, space="buy", optimize=True)
 
     # ===== IDEA 3 — unstuck bidirezionale (ri-entrata sullo spazio liberato) =====
     # Ogni clip di unstuck libera capacità sotto il TWE, ma oggi resta
@@ -766,6 +789,20 @@ class RyLoSStrategy(IStrategy):
         next_stake_pct = self.first_order_pct.value * (self.dca_multiplier.value**entry_count)
         next_stake = total_balance * next_stake_pct
 
+        # Modulazione con la pressione di volume: si carica di più dove il TMF
+        # è sopra il valore tipico dei fill DCA, di meno dove è sotto. Lo
+        # scostamento è limitato a +/-1 e il fattore resta in [0.2, 1.8], così
+        # la griglia continua a comprare agli stessi livelli (nessun ritardo).
+        if self.dca_tmf_weight.value != 0:
+            tmf_df, _ = self.dp.get_analyzed_dataframe(trade.pair, self.timeframe)
+            if len(tmf_df) > 0:
+                deviation = float(tmf_df["tmf_z"].iat[-1]) - self.TMF_FILL_REFERENCE
+                deviation = max(-1.0, min(1.0, deviation))
+                factor = 1.0 + self.dca_tmf_weight.value * deviation
+                next_stake *= max(0.2, min(1.8, factor))
+                if min_stake and next_stake < min_stake:
+                    next_stake = min_stake
+
         if reentry:
             # Ri-entrata: si compra solo lo spazio liberato dalle clip, non la
             # progressione geometrica (che a griglia esaurita sfonderebbe il TWE)
@@ -878,6 +915,34 @@ class RyLoSStrategy(IStrategy):
         dataframe["ema_anchor"] = ta.EMA(
             dataframe["close"], timeperiod=self.ema_span_candles.value
         )
+
+        # Twiggs Money Flow: pressione in acquisto misurata sul true range
+        # (regge i casi in cui la chiusura precedente cade fuori dal range) e
+        # smorzata con la media di Wilder. Serve solo a modulare lo stake DCA.
+        close_np = dataframe["close"].to_numpy()
+        vol_np = dataframe["volume"].to_numpy()
+        prev_close = np.concatenate([[np.nan], close_np[:-1]])
+        tr_high = np.fmax(dataframe["high"].to_numpy(), prev_close)
+        tr_low = np.fmin(dataframe["low"].to_numpy(), prev_close)
+        tr_range = tr_high - tr_low
+        adv = np.where(
+            tr_range > 0,
+            vol_np * ((close_np - tr_low) - (tr_high - close_np))
+            / np.where(tr_range > 0, tr_range, 1.0),
+            0.0,
+        )
+        # Media di Wilder: MA = (src + MA[-1] * (n-1)) / n  <=>  EWM alpha = 1/n
+        alpha = 1.0 / self.TMF_PERIOD
+        wima_adv = Series(np.nan_to_num(adv)).ewm(alpha=alpha, adjust=False).mean()
+        wima_vol = Series(vol_np).ewm(alpha=alpha, adjust=False).mean()
+        tmf = (wima_adv / wima_vol.replace(0, np.nan)).fillna(0.0)
+
+        # z-score mobile: rende la misura neutra al regime di volume e la centra
+        # su zero, così il peso modula in modo relativo e non assoluto
+        win = self.TMF_Z_WINDOW
+        roll = tmf.rolling(win, min_periods=win // 4)
+        tmf_z = (tmf - roll.mean()) / roll.std().replace(0, np.nan)
+        dataframe["tmf_z"] = tmf_z.clip(-2.0, 2.0).div(2.0).fillna(0.0)
 
         return dataframe
 
