@@ -28,10 +28,13 @@ class RyLoSStrategy(IStrategy):
     timeframe = "5m"
     can_short = False
     process_only_new_candles = True
-    # Warmup: deve coprire la finestra di normalizzazione del TMF (576 candele +
-    # il periodo di Wilder), altrimenti in live il tmf_z resterebbe neutro mentre
-    # in backtest sarebbe pieno -> divergenza live/backtest
-    startup_candle_count = 750
+    # Warmup: non basta coprire la finestra di normalizzazione del TMF (576).
+    # La rolling(576) INIZIA dove l'EWM di Wilder ha ancora poco warmup, e quel
+    # residuo contamina media e deviazione standard dello z-score. Misurato su
+    # 300 finestre casuali, errore max sul fattore di stake (peso 0.6):
+    #   startup  750 -> 9,3%   1000 -> 0,084%   1200 -> 0,001%   1500 -> 3e-8
+    # Con 1500 live e backtest coincidono; sotto, il live divergerebbe.
+    startup_candle_count = 1500
 
     # --- Twiggs Money Flow: parametri strutturali (non ottimizzati) ---
     TMF_PERIOD = 50  # smorzamento di Wilder (miglior parziale nel diagnostico)
