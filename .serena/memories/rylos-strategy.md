@@ -188,6 +188,16 @@ Run seedato (T4G + tmf 0,6, range `20241205-20260807`, warmup 1500). **A 2.070 e
 
 **Metodo riusabile (il vero guadagno della serata)**: calcolare il segnale candidato al momento del fill → correlarlo con l'esito **successivo** → correlazione parziale sui confondenti → campione indipendente + bootstrap a blocchi + stabilità temporale → solo allora scrivere codice. Costo ~1 ora contro una notte di hyperopt. Ha ucciso VP e funding in un'ora, e ha salvato il TMF.
 
+## ⛔ RISULTATO STRUTTURALE: il MAE NON è predicibile all'entry (2026-08-07)
+Domanda di Marco: "con tutti i trade peggiori e tutti gli indicatori, non riesci a evitarli?". Risposta misurata su 803 trade (`/tmp/entry_mae_diag.py` su debian), target = MAE, **non** i guard-stop (13 eventi: qualunque filtro fittato su 13 casi è rumore garantito).
+- **9 feature all'ultima candela chiusa prima della prima entry**: `osc_4rsi` +0,045 | `stoch_k` +0,051 | distanza EMA68 −0,042 | ATR% +0,040 | ATR10/ATR50 +0,041 | `tmf_z` +0,009 | ret24h −0,079 | ret7d +0,013 | vol realizzata 24h +0,034. **Massimo |rho| 0,079, nessuna passa Bonferroni (p<0,0056)**
+- **Quintili senza alcun andamento**: P(MAE>10%) oscilla fra 6% e 13% senza ordine su tutte le feature
+- **Ora del giorno Kruskal p=0,386, giorno della settimana p=0,637**: niente
+- ⛔ **Sui 13 guard-stop NESSUNA delle 9 variabili li distingue nemmeno a p<0,10**. Non sono un sottoinsieme riconoscibile: sono entry identiche a tutte le altre seguite da un mercato diverso
+- **Conseguenza operativa**: la coda è un **costo strutturale**, non un difetto filtrabile. Le uniche leve che funzionano sono quelle che agiscono **senza predire** — time exit (cappa la durata), TWE/`dca_we_weight` (limitano quanto si è carichi quando arriva), guard-stoploss (tronca) — e sono tutte già in strategia e già ottimizzate. **Non riproporre filtri di entry per evitare i trade peggiori.**
+- Spiega retroattivamente perché 5 overlay su 6 sono falliti: cercavano tutti di predire una cosa che da OHLCV+volume non è predicibile. E spiega perché il TMF invece regge: **non predice l'esito dell'entry**, predice la continuazione a brevissimo orizzonte dopo un fill DCA — pretesa molto più modesta e locale
+- Limite: 9 feature dalla famiglia OHLCV+volume. Non esclude che order flow, open interest o cross-asset predicano — ma quelli non sono backtestabili con i dati che abbiamo
+
 ## Funding rate come predittore del MAE: BOCCIATO (2026-08-07)
 Ipotesi: pullback con funding molto positivo = long affollati → liquidazioni → discese più profonde. Sarebbe stato il primo segnale a **predire** il MAE invece di misurarlo. Script `/tmp/funding_test.py` su debian (806 trade, funding preso strettamente prima della prima entry, 6 feature: last/24h/72h/7d/cum7d/percentile-90gg).
 - **Nessuna correlazione col MAE**: massimo +0,082 (`f_pct`, p=0,020) — con 6 feature la soglia di Bonferroni è p<0,0083, nessuna passa. Le parziali (controllando ret7d + ret24h + ATR%) sono **identiche alle grezze** → stavolta non è un confondente, è proprio assenza di segnale
