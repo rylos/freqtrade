@@ -218,7 +218,23 @@ Ipotesi: pullback con funding molto positivo = long affollati → liquidazioni �
 - Taratura corretta: `HELD_PENALTY_CAP` 4, `MAX_POSITION_HELD_DAYS` 6, `HELD_DAYS_GUARDRAIL_SCALE` 0.05, `TAIL_HOURS_SHARE_SCALE` 2.0, `MAX_RECOVERY_DAYS` 15. Swing ~1,6 punti = tie-breaker fra configurazioni comparabili, tollera al massimo ~1,5x di profitto in meno
 - Nuovo termine `TAIL_HOURS_SHARE_SCALE`: quota di ORE-TRADE oltre 3 giorni sul monte-ore totale (5371: 17,5%) — il max_held guarda un solo trade, questo misura quanto capitale resta immobilizzato
 
-## ⭐ CANDIDATO LIVE: T4G (dal 2026-07-31, tag `rylos-t4g-baseline`)
+## ⭐⭐ CANDIDATO LIVE ATTUALE: **T4V** (dal 2026-08-07 09:21, tag `rylos-t4v-live-20260807`)
+**T4G + `dca_tmf_weight` 0.6** (Twiggs Money Flow solo al rialzo sullo stake DCA). Genealogia: `5371` → `T4G` → **`T4V`** (time exit 4 giorni graduale + **V**olume). Params in `user_data/candidates/t4v_2026-08-07.json` (md5 `00cef67abc160a5f2cc3db8481ff1f2c`).
+- **Verifica pre-deploy col saldo reale** (`--dry-run-wallet 7353`, full range 20241205-20260807): T4G 15.137,59% / dd 4,66% / uw 19,15% / Sortino 2,50 / 813 trade → **T4V 17.008,01% / dd 4,66% / uw 19,15% / Sortino 2,64 / 810 trade**. **+12,4% a rischio identico**
+- **Live su amazon**: PID 176967, `2026.8-dev-f44881c`, avviato 2026-08-07 09:21, deploy a bot flat, zero errori, saldo 7.352,97 invariato. Log di avvio conferma `dca_tmf_weight = 0.6`, `stoploss -0.721`, `total_wallet_exposure_limit 2.929`
+- **ccxt aggiornato a 4.5.71** su amazon (era 4.5.67). ⚠️ **TA-Lib deliberatamente NON aggiornato** (0.6.8 su entrambe le macchine): portarlo a 0.7.1 solo su amazon la disallineerebbe da debian sulla libreria che calcola TUTTI gli indicatori. Da fare sulle due macchine insieme con regressione rifatta
+- ✅ **Verificato che il `tmf_z` coincide fra pandas 2.3.3 (debian, dove si valida) e pandas 3.0.3 (amazon, dove si opera)**: differenze a 1e-15, somma identica. Le due macchine erano già disallineate su pandas/numpy/technical, TA-Lib no
+
+### 🔒 Come tornare indietro (conservazione richiesta da Marco)
+- **Tag `rylos-t4g-live-20260807`** sul commit `fca309cfc` **esattamente in esecuzione prima del cambio**
+- Params identici bit-per-bit in `user_data/candidates/t4g_2026-07-31.json` (md5 `23baf272dbd3e40fb17e9945f3bf6c75`, verificato contro il file live)
+- **Backup fisico su amazon**: `~/backup-t4g-live-20260807/` con `.py`, `.json`, `config.json`, `pip-freeze.txt` e copia del db
+- Ritorno: `git checkout rylos-t4g-live-20260807` + copiare `t4g_2026-07-31.json` su `user_data/strategies/RyLoSStrategy.json`
+
+### ⚠️⚠️ TRAPPOLA: il params json NON blinda la configurazione
+Le chiavi **assenti dal json ricadono silenziosamente sui default di classe**. Scoperto confrontando T4G e T4V: il json T4G non contiene `dca_tmf_weight`, quindi con il `.py` nuovo ereditava 0.6 e produceva risultati **identici** al T4V (17.008,01% entrambi) — sembrava che la modifica non facesse niente. Per il confronto serve un json col peso **esplicito a 0.0**. **Conseguenza operativa: un rollback del solo json NON riporta indietro la strategia se il `.py` ha default diversi — vanno ripristinati entrambi.** Nel json live T4V `dca_tmf_weight` è esplicito. Gli unici due parametri assenti sono `dca_cooldown_candles` (2) ed `ema_span_candles` (68), entrambi `optimize=False` e coincidenti coi valori validati
+
+## Candidato precedente: T4G (dal 2026-07-31, tag `rylos-t4g-baseline`)
 **5371 + time exit a scarico graduale**: dal 4° giorno riduce il 25% dello stake ogni 24h, chiusura totale al tetto duro di 8 giorni. Params in `user_data/candidates/t4g_2026-07-31.json` (md5 `23baf272dbd3e40fb17e9945f3bf6c75`).
 Backtest 20241205-20260731 (wallet 10k): **842 trade, +20.579,05%, dd conto 4,66%, underwater 19,15%, win 97,1%, max holding 8,0gg, durata media 10:48**. Objective −36,25841.
 Ambiente consolidato 2026-08-02 (commit `866a0de7f9`): pc-work, debian e amazon allineati, `.py` md5 `857bccc947ca8b4f8ffabc6b507be982` su tutte e tre.
