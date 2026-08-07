@@ -20,6 +20,13 @@ Confrontando il live col backtest sulla stessa finestra, **col wallet sbagliato 
 - **Regola: in OGNI confronto live-vs-backtest passare `--dry-run-wallet <saldo reale>`**, altrimenti la conclusione sul rischio è falsata. Vale anche per lo spezzatino e per gli health check mensili
 - Corollario positivo: **drift check 2026-07-31 SUPERATO** — con wallet allineato, backtest e live coincidono su timestamp di entry/exit, tag e numero di clip dei 3 trade live (vedi `mem:rylos-strategy`)
 
+## ⚠️ Warmup: gli indicatori ricorsivi dentro finestre mobili divergono fra live e backtest (2026-08-07)
+Scoperto implementando il TMF (EWM di Wilder annidato dentro uno z-score rolling). `startup_candle_count` va dimensionato su **finestra mobile + convergenza del ricorsivo**, non solo sulla finestra:
+- Con warmup = 750 e rolling(576), la finestra rolling **inizia** dove l'EWM ha solo ~174 candele di storia; quel residuo contamina media e deviazione standard → l'ultimo valore differiva fino a 1,5e-1 fra dataframe corto (live) e serie intera (backtest), pari al 9,3% di errore sul fattore di stake
+- Convergenza misurata: 750 → 9,3% | 1000 → 0,084% | 1200 → 0,001% | **1500 → 3e-8**
+- **Test da rifare per ogni indicatore nuovo di questo tipo**: calcolare l'indicatore su N finestre casuali di lunghezza `startup_candle_count` e confrontare l'ultimo valore con quello della serie completa (`live_equivalence.py` nello scratchpad). È invisibile in backtest, si vedrebbe solo in live
+- ⚠️ Corollario operativo: **alzare `startup_candle_count` sposta lo start del backtest** (freqtrade avvisa "Moving start-date by N candles"), quindi ogni confronto A/B va rifatto sulla stessa baseline — i numeri storici del T4G non sono confrontabili con quelli di un warmup diverso
+
 ## Stoploss e leva
 - `stoploss` = rischio sul capitale, NON movimento prezzo: trigger prezzo = stoploss/leva (4x: -0.20 → -5% prezzo)
 - Rischio reale governato da TWE (esposizione/balance), non dalla leva exchange (che determina solo margine/liquidazione) — pattern passivbot
