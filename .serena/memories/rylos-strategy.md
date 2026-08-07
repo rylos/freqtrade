@@ -225,6 +225,24 @@ Ipotesi: pullback con funding molto positivo = long affollati → liquidazioni �
 - **ccxt aggiornato a 4.5.71** su amazon (era 4.5.67). ⚠️ **TA-Lib deliberatamente NON aggiornato** (0.6.8 su entrambe le macchine): portarlo a 0.7.1 solo su amazon la disallineerebbe da debian sulla libreria che calcola TUTTI gli indicatori. Da fare sulle due macchine insieme con regressione rifatta
 - ✅ **Verificato che il `tmf_z` coincide fra pandas 2.3.3 (debian, dove si valida) e pandas 3.0.3 (amazon, dove si opera)**: differenze a 1e-15, somma identica. Le due macchine erano già disallineate su pandas/numpy/technical, TA-Lib no
 
+### ✅ Il peso 0,6 sta su un ALTOPIANO, e a 0,75 c'è un precipizio (2026-08-07)
+Marco proponeva un fine tuning del peso. **Risposta metodologica: non cercare il massimo di una curva rumorosa (è il modo canonico di adattarsi al backtest), cercare il plateau.** Scan full-range col saldo reale 7353:
+| peso | profitto | dd | Sortino | trade |
+|---|---|---|---|---|
+| 0,00 | 15.137,59 | 4,66% | 2,50 | 813 |
+| 0,40 | 16.148,69 | 4,66% | 2,54 | 813 |
+| 0,50 | 16.321,57 | 4,66% | 2,55 | 813 |
+| **0,55** | **17.014,99** | 4,66% | 2,62 | 813 |
+| **0,60** | **17.008,01** | 4,66% | **2,64** | 810 |
+| 0,65 | 16.893,57 | 4,66% | 2,62 | 810 |
+| 0,70 | 16.587,39 | 4,66% | 2,56 | 808 |
+| **0,75** | 14.190,79 | **10,36%** | 2,02 | 807 |
+| 0,85 | 14.560,23 | **10,36%** | 2,03 | 807 |
+- **Altopiano regolare da 0,40 a 0,70**, tutto sopra la baseline: è una superficie di risposta vera, non rumore. 0,55 e 0,60 sono pari (0,04% di differenza), 0,60 ha il Sortino migliore
+- ⚠️⚠️ **PRECIPIZIO A 0,75: il drawdown RADDOPPIA da 4,66% a 10,36%.** Sopra 0,70 lo stake maggiorato sfonda un limite di esposizione e il comportamento della griglia cambia. **Non superare 0,70.**
+- ⚠️ **L'hyperopt aveva scelto 0,734 — a un centesimo dal precipizio.** L'optimizer parcheggia sul bordo: argomento indipendente e decisivo per aver scartato gli sfidanti 2013 e 5323, che avevano tutti quel peso
+- **Decisione: 0,6 confermato** (metà altopiano, Sortino massimo, 0,15 di margine dal precipizio). Nessuna modifica al bot
+
 ### 🔒 Come tornare indietro (conservazione richiesta da Marco)
 - **Tag `rylos-t4g-live-20260807`** sul commit `fca309cfc` **esattamente in esecuzione prima del cambio**
 - Params identici bit-per-bit in `user_data/candidates/t4g_2026-07-31.json` (md5 `23baf272dbd3e40fb17e9945f3bf6c75`, verificato contro il file live)
