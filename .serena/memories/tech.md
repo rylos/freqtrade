@@ -27,6 +27,13 @@ Scoperto implementando il TMF (EWM di Wilder annidato dentro uno z-score rolling
 - **Test da rifare per ogni indicatore nuovo di questo tipo**: calcolare l'indicatore su N finestre casuali di lunghezza `startup_candle_count` e confrontare l'ultimo valore con quello della serie completa (`live_equivalence.py` nello scratchpad). È invisibile in backtest, si vedrebbe solo in live
 - ⚠️ Corollario operativo: **alzare `startup_candle_count` sposta lo start del backtest** (freqtrade avvisa "Moving start-date by N candles"), quindi ogni confronto A/B va rifatto sulla stessa baseline — i numeri storici del T4G non sono confrontabili con quelli di un warmup diverso
 
+## Costo di `startup_candle_count` alto in live (verificato 2026-08-07)
+Domanda di Marco sul TMF a 1500 candele: il bot **non aspetta**, scarica lo storico all'avvio e poi opera subito. Misurato con chiamate pubbliche: **bybit 1.501 candele 5m in 2 chiamate = 2,80s; hyperliquid 1.502 in 1 chiamata = 0,76s**.
+- Limiti in `Exchange.validate_required_startup_candles` (`exchange.py:888`): **bybit** 1.000 candele/chiamata, `ohlcv_has_history=True` → max 5 chiamate = tetto **4.999**; **hyperliquid** 5.000/chiamata ma **`ohlcv_has_history=False`** → niente paginazione, tetto **4.999 in una sola chiamata**. Oltre il tetto freqtrade solleva `ConfigurationError` e non parte
+- Con 1500 siamo sotto un terzo del tetto su entrambi. Unico effetto: warning `Using 2 calls to get OHLCV` su bybit
+- ⚠️ **Su una coin appena listata (<5,2 giorni) le 1500 candele non esisterebbero** e il `tmf_z` resterebbe parzialmente non scaldato
+- ⚠️ **BUG ccxt 4.5.33/4.5.34 su hyperliquid**: `load_markets()` solleva `TypeError` in `fetch_spot_markets` (`mappedBase` None). L'endpoint candele funziona, ma freqtrade chiama `load_markets` all'avvio → **oggi il bot su hyperliquid non partirebbe**, indipendentemente dal TMF. Verificare con un ccxt più recente prima di considerare quella strada
+
 ## Stoploss e leva
 - `stoploss` = rischio sul capitale, NON movimento prezzo: trigger prezzo = stoploss/leva (4x: -0.20 → -5% prezzo)
 - Rischio reale governato da TWE (esposizione/balance), non dalla leva exchange (che determina solo margine/liquidazione) — pattern passivbot
