@@ -186,6 +186,11 @@ Run seedato (T4G + tmf 0,6, range `20241205-20260807`, warmup 1500). **A 2.070 e
 - **Robustezza ai parametri strutturali: 7 perturbazioni su 7 sopra la baseline** (ref −0,3/−0,4/−0,6, finestra 288/2016, periodo 21/100), fra +0,9% e +7,9%, segno mai invertito. **Attesa onesta al netto del bias di selezione: +4-5%, non +8,3%**
 - Il rischio non si muove MAI: dd 4,66% e uw 19,15% identici in ogni variante e ogni periodo
 
+**La QUANTITÀ di volume non aggiunge nulla alla DIREZIONE (2026-08-07, `/tmp/vol_magnitude_dca.py`)** — domanda di Marco. Testate 4 misure di volume grezzo ai 226 fill DCA (vol/SMA89, vol/SMA20, z-score del log-volume su 576, volume cumulato 1h):
+- Da sole sembrano predire, e **all'opposto dell'intuizione della capitolazione**: terzile a volume ALTO → discesa dopo 3,92%, oltre 5% nel 32,9% dei casi, profitto trade **−0,44%**; terzile BASSO → 3,02%, 18,7%, **+6,47%**. Volume grosso in discesa non è esaurimento dei venditori, è distribuzione
+- **Ma controllando anche per il TMF crollano tutte**: vol/SMA89 −0,054 (p=0,42), z-score +0,022 (p=0,74), vol 1h −0,120 (p=0,07). Mentre **il TMF controllando per il volume resta −0,228 (p=0,0006), immutato**. Sui 30 fill peggiori (discesa media 9,67% contro 2,26%) l'unico discriminante è il TMF (p=0,0030), non la quantità (p=0,14)
+- Meccanicamente ovvio a posteriori: volume alto in discesa **è** pressione in vendita, cioè TMF negativo. Non sono due informazioni. **Conclusione: non esiste un secondo segnale di volume da sfruttare — quello che i volumi avevano da dire è già tutto nel TMF**
+
 **Metodo riusabile (il vero guadagno della serata)**: calcolare il segnale candidato al momento del fill → correlarlo con l'esito **successivo** → correlazione parziale sui confondenti → campione indipendente + bootstrap a blocchi + stabilità temporale → solo allora scrivere codice. Costo ~1 ora contro una notte di hyperopt. Ha ucciso VP e funding in un'ora, e ha salvato il TMF.
 
 ## ⛔ RISULTATO STRUTTURALE: il MAE NON è predicibile all'entry (2026-08-07)
