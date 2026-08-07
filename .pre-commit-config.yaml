@@ -65,6 +65,8 @@ repos:
     rev: v2.4.3
     hooks:
     - id: codespell
+      # Le memorie Serena sono in italiano: il dizionario inglese le segnala a ogni commit
+      exclude: ^\.serena/
       additional_dependencies:
         - tomli
 
