@@ -18,7 +18,9 @@ repos:
     rev: "v2.3.0"
     hooks:
       - id: mypy
-        exclude: build_helpers
+        # user_data/ e' codice nostro (strategie), non sorgente upstream:
+        # non deve sottostare alle regole di tipo/stile del progetto
+        exclude: (build_helpers|^user_data/)
         additional_dependencies:
           - types-cachetools==7.0.0.20260713
           - types-filelock==3.2.7
@@ -34,7 +36,9 @@ repos:
     rev: 'v0.16.1'
     hooks:
       - id: ruff
+        exclude: ^user_data/
       - id: ruff-format
+        exclude: ^user_data/
 
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
@@ -65,8 +69,8 @@ repos:
     rev: v2.4.3
     hooks:
     - id: codespell
-      # Le memorie Serena sono in italiano: il dizionario inglese le segnala a ogni commit
-      exclude: ^\.serena/
+      # Memorie Serena e strategie sono in italiano: il dizionario inglese le segnala
+      exclude: ^(\.serena/|user_data/)
       additional_dependencies:
         - tomli
 

@@ -1,3 +1,5 @@
+import logging
+
 import numpy as np
 import talib.abstract as ta
 from pandas import DataFrame, Series, Timestamp
@@ -11,6 +13,8 @@ from freqtrade.strategy import (
     Trade,
     timeframe_to_minutes,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class RyLoSStrategy(IStrategy):
@@ -816,8 +820,19 @@ class RyLoSStrategy(IStrategy):
             if len(tmf_df) > 0:
                 deviation = float(tmf_df["tmf_z"].iat[-1]) - self.TMF_FILL_REFERENCE
                 deviation = max(0.0, min(1.0, deviation))
-                factor = 1.0 + self.dca_tmf_weight.value * deviation
-                next_stake *= max(1.0, min(2.0, factor))
+                factor = max(1.0, min(2.0, 1.0 + self.dca_tmf_weight.value * deviation))
+                # Tracciato in log: il fattore non è ricostruibile a posteriori dal db
+                # (resta solo lo stake finale) e serve per verificare in live quanto
+                # spesso la dimensione morde davvero. Una riga per fill DCA, non in
+                # backtest — lì i fill sono decine di migliaia.
+                if self.dp.runmode.value in ("live", "dry_run"):
+                    logger.info(
+                        "TMF DCA %s ingresso #%d: tmf_z %+.4f, scostamento %.4f, "
+                        "fattore %.4f (stake %.2f -> %.2f)",
+                        trade.pair, n_entries + 1, float(tmf_df["tmf_z"].iat[-1]),
+                        deviation, factor, next_stake, next_stake * factor,
+                    )
+                next_stake *= factor
 
         if reentry:
             # Ri-entrata: si compra solo lo spazio liberato dalle clip, non la
