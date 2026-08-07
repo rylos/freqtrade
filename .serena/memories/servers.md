@@ -5,7 +5,8 @@
 - Path: `/opt/freqtrade`, venv `.venv` (Python 3.11)
 - **Sync via git**: fork `github.com/rylos/freqtrade`, branch develop → `git pull origin develop`
 - tmux `ft-hyperopt`: hyperopt RyLoS (~22 epoch/min con -j 30). NON toccare i tmux passivbot: `back`, `back2`, `opt`
-- **2026-08-07 01:45**: run seedato in corso con la dimensione nuova `dca_tmf_weight` (TMF solo-rialzo sullo stake DCA, commit `ecbf0e7e1`). Dati riscaricati fino al 2026-08-06 23:35, range `20241205-20260807`, `--spaces buy sell stoploss`, 10k epoch, -j 30, log in `/tmp/hyperopt_tmf.log`. Seed verificato = T4G + `dca_tmf_weight` 0.6. ⚠️ objective NON confrontabile coi run precedenti (range diverso). A fine analisi **cancellare il .fthypt** (16-20GB) e il json fantasma
+- **2026-08-07: run seedato CHIUSO a 7.940 epoch** (fermato da Marco: aveva già dato la sua risposta). Miglior risultato epoch 7940, objective −36,30327, archiviato in `user_data/candidates/tmf_chal_ep7940_2026-08-07.json` e **scartato** come 2013 e 5323. ✅ Pulizia fatta: `.fthypt` da **13,8 GB** rimosso, `hyperopt_tickerdata.pkl` rimosso, **nessun json fantasma** prodotto dall'interruzione (verificato), disco da 53% a **42%**. tmux `ft-hyperopt` libero
+- **2026-08-07 01:45 (storico)**: run seedato con la dimensione nuova `dca_tmf_weight` (TMF solo-rialzo sullo stake DCA, commit `ecbf0e7e1`). Dati riscaricati fino al 2026-08-06 23:35, range `20241205-20260807`, `--spaces buy sell stoploss`, 10k epoch, -j 30, log in `/tmp/hyperopt_tmf.log`. Seed verificato = T4G + `dca_tmf_weight` 0.6. ⚠️ objective NON confrontabile coi run precedenti (range diverso). A fine analisi **cancellare il .fthypt** (16-20GB) e il json fantasma
 - Dati: HYPE/USDT:USDT 5m futures dal 2024-12-05 + funding/mark
 - Config: `user_data/config.json` (bybit, HYPE, max_open_trades 1, futures isolated)
 - Utility in /tmp: `extract_epoch.py N` (estrazione epoch), `loss_audit.py` (audit correlazioni loss)
