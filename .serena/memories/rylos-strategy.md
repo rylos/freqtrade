@@ -269,6 +269,91 @@ Segnalazione di Marco: con `order_book_top 2` l'uscita può riempirsi a metà e 
 - ⚠️ I timeout **non** aspettano la chiusura delle candele: `manage_open_orders` gira nel ciclo del bot ogni pochi secondi (`freqtradebot.py:1602`)
 - ⚠️ **Il backtest non modella nulla di tutto questo**: assume riempimento istantaneo e completo. È attrito che esiste solo in live e che nessuna delle nostre metriche vede
 
+## ⭐⭐ Serata del 2026-08-09: 4 meccanismi testati, 3 bocciati, 1 promosso
+Punto di partenza: la misura "i trade oltre 3 giorni sono il 3,3% ma occupano il 23,2% del calendario". **Premessa ribaltata dai dati**: non è un problema di lentezza. Baseline congelata nel tag **`rylos-t4v-live-20260808`** (`.py` md5 `ade7d76aa6b514cf6fbad00420617eda`, params `00cef67`), che include anche i parametri di esecuzione che vivono solo nel `config.json` di amazon. Tutte le varianti girate in `user_data/ab*/` con copia isolata di `.py`+`.json`: **il file live non è mai stato toccato** (verificato a ogni giro).
+
+### Il costo di un giorno, e dove sta davvero il danno (`/tmp/costo_giorno.py`, `/tmp/anatomia_lunghi.py`)
+Su 604 giorni e 810 trade, crescita composta attribuita per giorno di occupazione:
+- **brevi (≤3gg): 783 trade, 241 giorni (39,9% cal), +27.745%, +2,362%/giorno**
+- **lunghi (>3gg): 27 trade, 140 giorni (23,2% cal), −38,6%, −0,347%/giorno**
+- 🎯 **Ma il danno è tutto in 4 stop**: i 20 lunghi usciti normalmente fanno **+7,7% su 100 giorni** (sono lenti, non perdenti), i 3 time_exit −10,1%, i **4 stop_loss −36,5% in 16 giorni**. Tolti gli stop, i lunghi fanno −3,2% su 124 giorni = pareggio
+- ⛔ **Il vero bersaglio sono gli stop, non il calendario**: **13 stop_loss = 1,6% dei trade = −75,5% di crescita cumulata**. Ogni stop brucia 35-72% del capitale in gioco
+- **La durata predice l'esito solo alla coda estrema**: fino a 3gg il win rate è 96-100%; (3,5]gg → 81%; **(5,8]gg → 9%** (11 trade, −24,3%, 76 giorni di calendario)
+- 📌 Gli 11 stop "lenti" hanno **tutti esattamente 2 ingressi**: non sono bag profondi che collassano, sono posizioni giovani prese in pieno da una discesa
+
+### ❌ `reentry_enabled` (IDEA 3): ARCHIVIATO come ER — è rumore
+Ablazione sul range completo + sweep di `reentry_exposure` (contando i reentry **veri** dagli ordini; ⚠️ `enter_tag` del trade porta solo il tag del PRIMO ingresso, i reentry stanno in `orders[].ft_order_tag`):
+| soglia | reentry | profitto |
+|---|---|---|
+| 0,60 / 0,65 | **0** | +17.008,01% = **identico bit-per-bit** alla baseline |
+| 0,70 | 3 | +17.050,49% |
+| 0,75 | 4 | +17.475,49% (+2,7%) |
+| 0,80 | 6 | +16.666,81% (−2,0%) |
+| 0,85 | 9 | +16.653,23% |
+- Col default 0,60 **il ramo non viene preso nemmeno una volta in 604 giorni**: l'unstuck parte a `exposure ≥ 0,681` e la ri-entrata pretende `≤ 0,60`, soglia mai raggiunta prima della chiusura
+- 4 eventi → +2,7%, 6 eventi → −2,0%: **non monotono, campione minuscolo = rumore**. Stessa firma di ER (dominante nel top-200, inerte all'ablazione). ✅ **Da mettere `optimize=False`: smette di occupare una dimensione dell'hyperopt**
+
+### ❌ `unstuck_age_scaling`: BOCCIATO, peggiora in modo monotono
+0,0 → +17.008% · **0,3 → +16.580,90% (−2,5%)** · **0,6 → +16.298,08% (−4,2%)**. Il parametro esisteva già (riga ~207) col commento che descrive esattamente l'idea; l'hyperopt lo aveva lasciato a 0 **e aveva ragione**. Causa: i 20 lunghi che escono normalmente sono in attivo, quindi clip più aggressive vendono in perdita roba che sarebbe rientrata. **Resta 0, ora sapendo perché.**
+
+### ⛔⛔ DCA guard (sospendere i DCA durante una discesa veloce): BOCCIATO CON FORZA
+Ipotesi: gli 11 stop "lenti" entrano normali e affondano dopo, quindi si attaccano ai DCA. Guard inserito dopo unstuck/harvest e prima del ramo DCA (blocca solo gli acquisti). **Ogni singola taratura peggiora, e in modo monotono:**
+| finestra/soglia | profitto | stop | underwater |
+|---|---|---|---|
+| off | +17.008% | 13 | 19,15% |
+| 6h/−4% | +647% | **20** | 53,78% |
+| 6h/−6% | +753% | **20** | 45,76% |
+| 3h/−3% | +507% | **19** | 65,76% |
+| 3h/−7% | +7.250% | 14 | 29,14% |
+- 🎯 **Gli stop AUMENTANO** (13 → 20) e l'underwater triplica. Meccanismo: 810 → 775 trade, e **7 vincenti convertiti in stop**; su curva composta 7 stop extra a −46% valgono un fattore ~75 (il profitto cade di 22)
+- ⭐ **LEZIONE STRUTTURALE: il DCA che compra durante la discesa è la DIFESA, non il rischio.** Abbassa il prezzo medio quel tanto che basta perché il rimbalzo riporti la posizione in profitto invece che sullo stop. **Non ostacolare mai la griglia mentre scende** — è il meccanismo con cui la strategia guadagna il 97% di win rate
+- 🪤🪤 **L'ERRORE CHE MI CI HA PORTATO — bias di selezione tautologico**: avevo misurato AUC 89% confrontando lo stato del mercato "all'ultimo DCA" fra stop e sani. Ma **l'ultimo acquisto di un trade che finisce in stop è per costruzione l'ultimo prima del crollo finale**: non è un segnale predittivo, è la definizione di stop_loss. La variabile era già contaminata dall'esito. **Prima di credere a una separazione, chiedersi se il momento di misura è scelto in modo indipendente dall'esito.** Vedi anche la sezione "il MAE NON è predicibile all'entry": stessa famiglia di errore
+
+### ✅ Crash guard sul PRIMO ingresso: l'unica cosa che funziona (ma leggerla bene)
+Idea di Marco: se la caduta è verticale non è il momento di comprare. Filtro su `close.pct_change(6)` (30 min) in `populate_entry_trend`.
+- **All'ingresso gli stop sono indistinguibili dai sani** (AUC 50-58% su 9 misure) — **coerente con la memoria "il MAE non è predicibile all'entry", non in contraddizione**. Un filtro d'entrata *generico* costa il 5-20% dei trade sani (a +7,5/+10% ciascuno) per 2-3 stop su 13: pessimo affare
+- 🎯 **Ma 2 dei 13 stop sono un'altra specie**: i due del **10/10/2025** sono entrati DENTRO il crollo (ret 30min **−33,94%** e **−14,67%**), −21.327 USDT insieme. Gli altri 11 erano fra −0,15% e −3,52%, cioè normali
+- **La zona sotto −10% è deserta**: in 604 giorni ci sono entrati solo quei due trade, entrambi stop da −72,49%. Nessun vincente nasce lì (l'unico vicino è a −8,47%, +291 USDT)
+| soglia | trade | profitto | stop | uw | peggior trade |
+|---|---|---|---|---|---|
+| off | 810 | +17.008% | 13 | 19,15% | −72,49% |
+| −6% | 805 | +18.610% | 11 | **14,78%** | **−49,43%** |
+| −8% | 806 | +16.136% | 11 | **14,78%** | **−49,43%** |
+| −10% | 806 | +16.136% | 11 | **14,78%** | **−49,43%** |
+| −12% | 808 | +18.753% | 11 | **14,78%** | **−49,43%** |
+- ⚠️ **Il profitto è rumore** (+9,4% / −5,1% / −5,1% / +10,3%, senza ordine): da riordino della sequenza, non dalla soglia. **Non scegliere la taratura sul profitto**
+- ⭐⭐ **Il rischio invece è identico in TUTTE le tarature**: uw **19,15% → 14,78%**, peggior trade **−72,49% → −49,43%**, 2 stop in meno. **È la prima cosa in assoluto che muove l'underwater**, rimasto inchiodato a 19,15% in ogni variante e ogni periodo mai testati (vedi riga «Il rischio non si muove MAI»). Profit factor 4,33 → 4,67, winrate 97,04 → 97,28, CAGR 21,4 → 22,7, dd conto 4,66% invariato. ⚠️ **Sortino leggermente PEGGIO: 2,635 → 2,558** — va segnalato perché è il criterio di selezione dei candidati
+- 🪤 **Quanto spesso morde, in 20 mesi di dati**: ret6 < −6% → 35 episodi · < −8% → 9 · < −10% → 4 · **< −12% → 1 solo (il 10/10/2025)**. Quindi **il +10,3% della riga −12% NON è rendimento atteso**: è quanto valeva a posteriori non essere lì quel giorno. Tararsi su −12% = fittare un parametro su un evento singolo
+- 📌 **Quello che salva la regola dall'overfit è che non nasce dai dati**: «non comprare mentre il mercato perde l'8-10% in mezz'ora» è una regola di rischio difendibile a priori; i dati servono solo a verificare che la zona sia deserta. **Preferire −8% (9 episodi, regola generale) a −12% (1 episodio, descrizione del 10 ottobre)**
+
+#### ⚖️ Validazione per sotto-periodi (4 blocchi da ~151 giorni): agisce in UNO su QUATTRO
+| periodo | off | cg08 / cg12 |
+|---|---|---|
+| 20241210-20250510 | 2.042%, 5 stop, uw 14,78% | cg12 **identico**; cg08 1.745% (**peggio**) |
+| 20250510-20251008 | 58%, 2 stop, uw 12,00% | **identici entrambi** |
+| **20251008-20260308** | 149%, 6 stop, uw **19,15%**, peggior −72,49% | **174%, 4 stop, uw 11,81%, peggior −48,64%, sortino 3,256→3,345** |
+| 20260308-20260806 | 94%, 0 stop, uw 4,66% | **identici entrambi** |
+- ⭐ **Verdetto onesto: NON è un miglioramento della strategia, è un'assicurazione contro un evento capitato una volta.** In 3 blocchi su 4 non tocca nulla; tutto il beneficio sta nel blocco che contiene il 10/10/2025, dove però è reale e pulito. **Il "+10,3%" sul range completo non è rendimento atteso**
+- 📌 Nota utile: **l'underwater 19,15% della baseline è interamente prodotto dal 10/10/2025** — negli altri 3 blocchi la baseline stessa sta a 14,78% / 12,00% / 4,66%
+
+### ⚖️ Time exit: è un TRADE-OFF esplicito profitto↔Sortino, non una taratura sbagliata
+Sweep su `time_exit_days` e `time_exit_qty_pct`, range completo (baseline attuale = d4/q25):
+| variante | profitto | sortino | trade | stop |
+|---|---|---|---|---|
+| **disattivato** | **+19.690%** | 2,327 | 802 | 13 |
+| d8/q25 | +18.435% | 1,786 | 802 | 13 |
+| d6/q25 | +17.758% | 1,782 | 805 | 13 |
+| **d4/q25 (ATTUALE)** | +17.008% | 2,635 | 810 | 13 |
+| **d3/q50** | +16.409% | **3,315** ⭐ | 821 | 12 |
+| d4/q50 | +15.747% | 2,991 | 810 | 13 |
+| d3/q25 | +15.633% | 3,081 | 816 | 13 |
+| d4/q100 | +13.225% | 2,368 | 829 | 11 |
+| d2/q25 | +12.299% | 2,320 | 830 | 11 |
+- **Il profitto cresce in modo monotono man mano che il time exit si allenta**, massimo col meccanismo **spento** (+15,8% sopra l'attuale). Ma il **Sortino ha un picco netto sulle soglie corte** e crolla a ~1,78 su d6/d8
+- 🎯 **`d3/q50` è il candidato migliore emerso**: Sortino **3,315 contro 2,635** (+26%) per **−3,5% di profitto**, e uno stop in meno. Dato che la selezione dei candidati parte dal Sortino (vedi `mem:pareto`), è il cambio col miglior rapporto della serata dopo il crash guard
+- ⚠️ **L'underwater resta 19,15% in TUTTE le varianti**: il time exit non tocca il rischio di coda, lo tocca solo il crash guard
+- 📌 Il time exit **costa profitto e compra qualità del rendimento**. Non è un errore da correggere: è una scelta su quale metrica ottimizzare, da fare consapevolmente
+
 ## Candidato precedente: T4G (dal 2026-07-31, tag `rylos-t4g-baseline`)
 **5371 + time exit a scarico graduale**: dal 4° giorno riduce il 25% dello stake ogni 24h, chiusura totale al tetto duro di 8 giorni. Params in `user_data/candidates/t4g_2026-07-31.json` (md5 `23baf272dbd3e40fb17e9945f3bf6c75`).
 Backtest 20241205-20260731 (wallet 10k): **842 trade, +20.579,05%, dd conto 4,66%, underwater 19,15%, win 97,1%, max holding 8,0gg, durata media 10:48**. Objective −36,25841.
