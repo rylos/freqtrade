@@ -402,6 +402,29 @@ Il fenomeno sopra era **già documentato** (commento riga ~262 e `custom_stoplos
 - **Confronto diretto te_cg vs te_cg_anch: 6 metriche su 7 a favore di te_cg** (profitto, uw, sortino, calmar, profit factor, peggior trade; perde solo il winrate per 0,1 punti). **Non è un trade-off, è dominanza**
 - 📌 Onestà: rispetto alla BASE, `te_cg_anch` non è assurdo (uw 15,68% vs 19,15%, sortino 3,029 vs 2,635, peggior −64,58% vs −72,49%) — batte la baseline su 3 metriche di rischio su 4. È scartato solo perché `te_cg` fa meglio su tutte
 
+### ⚠️⚠️ Sensitivity locale attorno al combinato: NON è un plateau, è una CRESTA STRETTA
+Domanda di Marco («serve un hyperopt sul combinato?»). 13 backtest, 6 parametri co-ottimizzati mossi di un passo sopra/sotto, tutti misurati **dentro** il combinato (`user_data/ab9/`):
+| variante | profitto | stop | uw | sortino | trade < −50% |
+|---|---|---|---|---|---|
+| **centro (combinato)** | 15.568% | 10 | 11,97% | 3,283 | **0** |
+| TWE 2,60 | **485%** | 26 | 17,57% | 2,829 | **22** |
+| TWE 3,20 | 16.679% | 10 | 11,97% | 3,251 | 0 |
+| dca_distance 0,008 | 3.144% | 13 | 28,31% | 2,096 | 1 |
+| dca_distance 0,013 | 3.900% | 11 | 17,87% | 2,528 | 0 |
+| dca_multiplier 2,40 | 9.851% | 12 | 11,14% | 3,240 | 1 |
+| dca_multiplier 3,00 | **517%** | 26 | 18,93% | 2,880 | **22** |
+| first_order 5,5% | 8.421% | 10 | **9,98%** | **3,565** | 0 |
+| first_order 7,8% | **694%** | 26 | 20,77% | 2,703 | **22** |
+| unstuck 0,60 | 15.158% | 10 | 11,97% | 3,292 | 0 |
+| unstuck 0,76 | 16.496% | 10 | 11,97% | **3,330** | 0 |
+| stoploss −0,62 | 8.262% | 18 | 23,55% | 2,177 | 0 |
+| stoploss −0,80 | 7.771% | 9 | 30,72% | 2,870 | 6 |
+- ⛔⛔ **Tre parametri su sei, mossi di UN passo, fanno crollare il risultato di 20-30 volte**, e i tre crolli hanno la **stessa identica firma: 647 trade, 26 stop, 22 sotto −50%**. TWE più basso, moltiplicatore più alto, primo ordine più grande sono tre modi di dire la stessa cosa: **la griglia diventa troppo aggressiva rispetto alla capacità** → la posizione satura prima → gli stop triplicano e la coda esplode
+- 🎯 **La taratura attuale sta appena dentro il bordo della zona sicura: verso "più esposizione" c'è un precipizio a un passo.** Da tenere presente in QUALUNQUE modifica futura a TWE / `dca_multiplier` / `first_order_pct`
+- **Risposta sull'hyperopt: non serve, ma non perché non troverebbe nulla — perché su una cresta così troverebbe TROPPO.** Punti che nel backtest sembrano migliori e sono altrettanto fragili, indistinguibili senza rifare ogni volta la validazione per sotto-periodi
+- I due che *sembrano* battere il centro (`unstuck 0,76`: +6% e sortino 3,330; `TWE 3,20`: +7%, rischio identico) sono **dentro il rumore da riordino della sequenza** già misurato (±10% sulle stesse varianti). Non prenderli per veri senza sotto-periodi
+- 📌 **`first_order_pct` è la vera leva rischio/rendimento**: a 5,5% dà uw **9,98%** e sortino **3,565** (entrambi meglio del centro) al costo di metà profitto. Se un giorno si vuole spostare il profilo di rischio in modo sostanziale si agisce **lì**, non sui meccanismi di uscita
+
 ### 🚫 Perché NON riottimizzare col combinato (decisione 2026-08-09)
 - **La loss premia il profitto con `log × 4`**, e il combinato **sacrifica 8,5% di profitto** per comprare rischio e Sortino. Un hyperopt su quella loss vedrebbe solo il profitto perso e riporterebbe `time_exit` verso i valori lunghi o verso lo spegnimento: **smonterebbe esattamente la scelta appena fatta**
 - Il crash guard tocca **2 trade su 810**: l'ottimizzatore quasi non lo vede
