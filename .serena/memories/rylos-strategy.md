@@ -391,6 +391,17 @@ Il fenomeno sopra era **già documentato** (commento riga ~262 e `custom_stoplos
 - 📌 I due controlli (`base` 17.008,01% e `te_cg` 15.568,02%) hanno riprodotto i numeri esatti dei run precedenti → confronto pulito
 - 🪤 Trappola operativa: negli script su debian usare **`.venv/bin/python`**, non `python3` di sistema (numpy assente) — i backtest girano lo stesso ma il riassunto muore
 
+#### 🪤🪤 «Ma il braccio a 0 stop?» — domanda di Marco, e la risposta è istruttiva
+**Il numero di stop_loss NON è una metrica di rischio: è il nome di una porta.** In `te_cg_anch` gli stop sono zero ma le perdite sono tutte lì, escono dal *trailing*:
+| braccio | trade < −30% | da quale uscita |
+|---|---|---|
+| base | 13 | 13 stop_loss |
+| te_cg | 10 | 10 stop_loss |
+| **te_cg_anch** | **9** | **9 trailing** — zero stop, stesse perdite |
+- **Nella coda va pure peggio**: trade sotto −50% → base **2**, anchor **9**, **te_cg 0**, te_cg_anch **4**. Somma delle perdite: te_cg **−629,6%** contro −649,0% (anch) e −733,8% (base). **`te_cg` è l'unico braccio senza nemmeno un trade sotto −50%**
+- **Confronto diretto te_cg vs te_cg_anch: 6 metriche su 7 a favore di te_cg** (profitto, uw, sortino, calmar, profit factor, peggior trade; perde solo il winrate per 0,1 punti). **Non è un trade-off, è dominanza**
+- 📌 Onestà: rispetto alla BASE, `te_cg_anch` non è assurdo (uw 15,68% vs 19,15%, sortino 3,029 vs 2,635, peggior −64,58% vs −72,49%) — batte la baseline su 3 metriche di rischio su 4. È scartato solo perché `te_cg` fa meglio su tutte
+
 ### 🚫 Perché NON riottimizzare col combinato (decisione 2026-08-09)
 - **La loss premia il profitto con `log × 4`**, e il combinato **sacrifica 8,5% di profitto** per comprare rischio e Sortino. Un hyperopt su quella loss vedrebbe solo il profitto perso e riporterebbe `time_exit` verso i valori lunghi o verso lo spegnimento: **smonterebbe esattamente la scelta appena fatta**
 - Il crash guard tocca **2 trade su 810**: l'ottimizzatore quasi non lo vede
