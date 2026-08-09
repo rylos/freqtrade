@@ -69,8 +69,9 @@ repos:
     rev: v2.4.3
     hooks:
     - id: codespell
-      # Memorie Serena e strategie sono in italiano: il dizionario inglese le segnala
-      exclude: ^(\.serena/|user_data/)
+      # Memorie Serena, strategie e script operativi sono in italiano:
+      # il dizionario inglese li segnala
+      exclude: ^(\.serena/|user_data/|ops/)
       additional_dependencies:
         - tomli
 
