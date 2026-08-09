@@ -425,6 +425,39 @@ Domanda di Marco («serve un hyperopt sul combinato?»). 13 backtest, 6 parametr
 - I due che *sembrano* battere il centro (`unstuck 0,76`: +6% e sortino 3,330; `TWE 3,20`: +7%, rischio identico) sono **dentro il rumore da riordino della sequenza** già misurato (±10% sulle stesse varianti). Non prenderli per veri senza sotto-periodi
 - 📌 **`first_order_pct` è la vera leva rischio/rendimento**: a 5,5% dà uw **9,98%** e sortino **3,565** (entrambi meglio del centro) al costo di metà profitto. Se un giorno si vuole spostare il profilo di rischio in modo sostanziale si agisce **lì**, non sui meccanismi di uscita
 
+### ⭐⭐⭐ L'UNSTUCK COSTA E NON PROTEGGE: il risultato più grosso della serata
+Nato da una domanda di Marco su una riga della sensitivity che **io avevo archiviato come rumore** (`unstuck 0,76`). Sbagliato: era la firma più pulita di tutte. Sweep completo dentro il combinato (`user_data/ab10/`, `ab11/`):
+| soglia | profitto | **clip** | sortino | uw | stop | peggior | sotto50 |
+|---|---|---|---|---|---|---|---|
+| 0,60 | 15.158% | 102 | 3,292 | 11,97% | 10 | −49,31% | 0 |
+| **0,681 (live)** | 15.568% | 91 | 3,283 | 11,97% | 10 | −49,31% | 0 |
+| 0,74 | 15.995% | 83 | 3,284 | 11,97% | 10 | −49,31% | 0 |
+| 0,80 (bordo range) | 17.075% | 65 | 3,386 | 11,97% | 10 | −49,31% | 0 |
+| 0,90 | 19.210% | 38 | 3,474 | 11,97% | 10 | −49,31% | 0 |
+| **1,00 = spento** | **22.312%** | **0** | **3,570** | 11,97% | 10 | −49,31% | 0 |
+- ⭐ **Monotono su profitto E clip, con il rischio IDENTICO in ogni punto** (uw, stop, peggior trade, coda, n. trade, trade lunghi): non è riordino della sequenza, è un meccanismo — **meno clip = meno premio pagato**. Coerente con la misura dal vivo sul trade #5, dove 7 clip erano costate ~75 USDT perché il prezzo poi era risalito
+- ⚠️ Il range del parametro è **0,55-0,80**: il massimo cadeva **sul muro**. Andando oltre (json, il range vincola solo l'hyperopt) il trend prosegue fino a spegnimento. **Un ottimo appoggiato al bordo dello spazio di ricerca va sempre sondato oltre il bordo**
+- 🧪 **Ipotesi «è solo ridondante col time exit» → FALSIFICATA** (2x2 + controlli, `user_data/ab12/`). Spegnere l'unstuck migliora **sempre**, e di più quando è l'unica difesa:
+  · time exit d4/q25: 17.008% → **25.115%** (+48%) · d3/q50: 16.409% → **23.307%** (+42%) · **time exit SPENTO: 19.690% → 32.614% (+66%)**
+  · rischio identico in tutte e sei le configurazioni (uw 19,15%, peggior −72,49%, 2 sotto −50%, stessa durata massima)
+- 📌 Il commento riga ~196 («l'unstuck lima ma non chiude, va accoppiato al time exit, senza entra in rasatura perpetua») descrive un rischio che **nel backtest non si materializza**: senza time exit e senza unstuck il risultato è il migliore in assoluto
+- 📌 Le ~9 clip residue a soglia 1,00 vengono da `unstuck_max_held_days=16`, che scatta a prescindere dalla soglia
+- ⚠️⚠️ **Cautela dovuta**: questo ribalta un meccanismo centrale ereditato da passivbot sulla base di un campione con **un solo crash vero**. «Non ha protetto in 20 mesi» ≠ «non proteggerà mai»: lo scenario in cui servirebbe (discesa lunga e continua verso la liquidazione) non c'è in questi dati, e il guard-stop fa già da rete
+
+### 🏆 CONFIGURAZIONE CANDIDATA: d3/q50 + crash guard −8% + unstuck spento
+Contro il candidato live T4V, range completo: profitto **+17.008% → +22.312% (+31%)**, sortino **2,635 → 3,570 (+36%)**, uw **19,15% → 11,97% (−37%)**, peggior trade **−72,49% → −49,31%**, trade sotto −50% **2 → 0**, stop **13 → 10**. **Migliora ogni metrica contemporaneamente: non è più un trade-off.**
+Validazione sui 4 sotto-periodi (`user_data/ab13/`):
+| periodo | profitto | sortino | uw | peggior | durata max |
+|---|---|---|---|---|---|
+| dic24-mag25 | 2.042 → **2.102** | 6,162 → **6,756** | 14,78 → **11,97** | −49,42 → **−49,31** | 6,9 → **6,0** |
+| mag-ott25 | 58,23 → 54,42 ↓ | 1,088 → **1,128** | 12,00 → **11,90** | −49,43 → **−49,04** | 8,0 → **6,0** |
+| **ott25-mar26** | 149 → **237** (+59%) | 3,256 → **5,335** | 19,15 → **11,81** | −72,49 → **−48,64** | 8,0 → **6,0** |
+| mar-ago26 | 93,71 → 90,77 ↓ | 3,862 → **6,632** | 4,66 → 5,30 ↓ | −16,75 → **−13,55** | 8,0 → **6,0** |
+- ✅ **Sortino migliore in 4 periodi su 4; peggior trade migliore in 4 su 4; underwater migliore in 3 su 4**. Profitto migliore in 2 su 4, ma sul range completo +31% perché il blocco del crash domina in composizione
+- ✅ **Durata massima 6,0 giorni in OGNI periodo** contro 8,0: il time exit corto cappa davvero la coda
+- 📊 Molto più robusta del solo crash guard (che reggeva in 1 blocco su 4)
+- ⏸️ **NON portata in live.** Serve: nuovo candidato json (3 parametri: `time_exit_days` 3, `time_exit_qty_pct` 0,50, `unstuck_threshold` 1,00), modifica `.py` per il crash guard, nuovo tag, regressione bit-perfect, md5 riallineato su pc-work/debian/amazon
+
 ### 🚫 Perché NON riottimizzare col combinato (decisione 2026-08-09)
 - **La loss premia il profitto con `log × 4`**, e il combinato **sacrifica 8,5% di profitto** per comprare rischio e Sortino. Un hyperopt su quella loss vedrebbe solo il profitto perso e riporterebbe `time_exit` verso i valori lunghi o verso lo spegnimento: **smonterebbe esattamente la scelta appena fatta**
 - Il crash guard tocca **2 trade su 810**: l'ottimizzatore quasi non lo vede
