@@ -117,6 +117,24 @@ class RyLoSStrategy(IStrategy):
     )
     reentry_exposure = DecimalParameter(0.30, 0.90, default=0.60, space="buy", optimize=True)
 
+    # ===== CRASH GUARD: niente primo ingresso dentro una caduta verticale =====
+    # Idea di Marco. NON è un filtro predittivo: all'ingresso gli stop sono
+    # indistinguibili dai trade sani (AUC 50-58% su 9 misure, coerente col
+    # risultato strutturale "il MAE non è predicibile all'entry"). È una regola
+    # di rischio a priori — non si compra mentre il mercato perde l'8% in mezz'ora
+    # — e i dati servono solo a verificare che la zona sia deserta: in 604 giorni
+    # sotto -10%/30min sono entrati SOLO 2 trade, entrambi stop da -72,49%
+    # (10/10/2025, -21.327 USDT). L'unico trade sano vicino è a -8,47%.
+    # Episodi storici: -6% -> 35, -8% -> 9, -10% -> 4, -12% -> 1.
+    # ⚠️ Il beneficio è assicurativo e NON è rendimento atteso: agisce in 1
+    # sotto-periodo su 4. Quello che si compra davvero è la coda — underwater
+    # 19,15% -> 14,78% e peggior trade -72,49% -> -49,43%, identico a ogni
+    # soglia provata (6/8/10/12%), perché il beneficio viene dai 2 trade e non
+    # dalla taratura. Scelto 8%: 9 episodi = regola generale, mentre 12% ne
+    # coglie 1 solo e sarebbe la descrizione di un singolo giorno.
+    # 0 = disattivato.
+    crash_guard_pct = DecimalParameter(0.0, 15.0, default=8.0, space="buy", optimize=False)
+
     # Ancoraggio EMA per il primo ordine (passivbot initial_ema_dist):
     # entra solo se il prezzo è sotto EMA * (1 + dist), dist negativa
     initial_ema_dist = DecimalParameter(-0.016, -0.006, default=-0.011, space="buy", optimize=True)
@@ -182,8 +200,17 @@ class RyLoSStrategy(IStrategy):
     profit_lock_threshold = DecimalParameter(0.10, 0.22, default=0.156, space="sell", optimize=True)
     profit_lock_qty_pct = DecimalParameter(0.8, 1.0, default=0.97, space="sell", optimize=True)
 
-    # Unstuck passivbot: riduzione parziale della posizione stuck
-    unstuck_threshold = DecimalParameter(0.55, 0.80, default=0.681, space="sell", optimize=True)
+    # Unstuck passivbot: riduzione parziale della posizione stuck.
+    # ⚠️ Range esteso a 1.00 il 2026-08-10 (era 0.55-0.80): il massimo cadeva
+    # sul bordo, e sondando oltre il vantaggio proseguiva fino allo spegnimento
+    # (1.00 = soglia mai raggiunta = nessuna clip). Misura sul range completo,
+    # dentro il combinato: 0.681 -> 15.568%, 0.80 -> 17.075%, 1.00 -> 22.312%,
+    # con clip 91 -> 65 -> 0 e rischio IDENTICO in ogni punto (uw 11,97%,
+    # 10 stop, peggior trade -49,31%, zero trade sotto -50%). L'unstuck lima
+    # posizioni che poi risalgono: costa premio e non protegge nulla di
+    # misurabile in 604 giorni. Non è ridondanza col time exit — spegnerlo
+    # migliora anche col time exit disattivato (+66%).
+    unstuck_threshold = DecimalParameter(0.55, 1.00, default=0.681, space="sell", optimize=True)
     unstuck_close_pct = DecimalParameter(0.04, 0.08, default=0.058, space="sell", optimize=True)
     unstuck_ema_dist = DecimalParameter(-0.03, 0.0, default=-0.005, space="sell", optimize=True)
     unstuck_loss_allowance_pct = DecimalParameter(
@@ -924,6 +951,10 @@ class RyLoSStrategy(IStrategy):
         return -abs(1 - target / current_rate) * 4
 
     def populate_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
+        # Velocità di caduta sulle ultime 6 candele (30 min): serve al crash
+        # guard in populate_entry_trend.
+        dataframe["ret6_pct"] = dataframe["close"].pct_change(6) * 100
+
         # Oscillatore 4RSI di RyLoS: avg(RSI2, RSI7, RSI14) - 50
         rsi_fast = ta.RSI(dataframe["close"], timeperiod=2)
         rsi_mid = ta.RSI(dataframe["close"], timeperiod=7)
@@ -992,11 +1023,21 @@ class RyLoSStrategy(IStrategy):
             dataframe["close"] <= dataframe["ema_anchor"] * (1 + self.initial_ema_dist.value)
         ).fillna(False)
 
+        # Crash guard: fillna(True) perché sulle prime candele il ret6 non
+        # esiste e l'assenza di dato non deve bloccare l'ingresso.
+        crash_condition = (
+            (dataframe["ret6_pct"] > -self.crash_guard_pct.value)
+            if self.crash_guard_pct.value > 0
+            else Series(True, index=dataframe.index)
+        )
+        crash_condition = crash_condition.fillna(True)
+
         entry_condition = (
             osc_condition
             & stoch_condition
             & (dataframe["close"] < dataframe["open"])
             & ema_condition
+            & crash_condition
         )
 
         dataframe["enter_tag"] = ""

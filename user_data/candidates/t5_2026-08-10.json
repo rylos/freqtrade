@@ -1,0 +1,55 @@
+{
+  "strategy_name": "RyLoSStrategy",
+  "params": {
+    "buy": {
+      "dca_atr_multiplier": 1.689,
+      "dca_distance": 0.01,
+      "dca_multiplier": 2.713,
+      "dca_trailing_retracement_pct": 0.005,
+      "dca_we_weight": 0.242,
+      "emergency_critical_multiplier": 1.31,
+      "emergency_dca_threshold": -0.067,
+      "entry_stoch_os": 36.222,
+      "first_order_pct": 0.066,
+      "initial_ema_dist": -0.011,
+      "osc_entry_threshold": -10.028,
+      "total_wallet_exposure_limit": 2.929,
+      "reentry_enabled": false,
+      "reentry_exposure": 0.6,
+      "dca_tmf_weight": 0.6,
+      "crash_guard_pct": 8.0
+    },
+    "sell": {
+      "close_grid_enabled": false,
+      "close_grid_markup_pct": 0.025,
+      "close_grid_qty_pct": 0.269,
+      "close_trailing_retracement_pct": 0.004,
+      "close_trailing_threshold_pct": 0.013,
+      "exit_stoch_ob": 73.05,
+      "min_profit_for_overbought_exit": 0.041,
+      "osc_exit_threshold": 24.845,
+      "profit_lock_enabled": true,
+      "profit_lock_qty_pct": 0.97,
+      "profit_lock_threshold": 0.156,
+      "unstuck_close_pct": 0.058,
+      "unstuck_ema_dist": -0.005,
+      "unstuck_loss_allowance_pct": 0.007,
+      "unstuck_max_held_days": 16,
+      "unstuck_threshold": 1.0,
+      "time_exit_enabled": true,
+      "time_exit_days": 3,
+      "time_exit_qty_pct": 0.5,
+      "harvest_enabled": false,
+      "harvest_markup_pct": 0.02,
+      "harvest_qty_pct": 0.15,
+      "stoploss_anchor": "first_entry",
+      "unstuck_release_ratio": 1.0,
+      "unstuck_age_scaling": 0.0
+    },
+    "stoploss": {
+      "stoploss": -0.721
+    }
+  },
+  "ft_stratparam_v": 1,
+  "export_time": "2026-07-31 16:30:00+00:00"
+}
