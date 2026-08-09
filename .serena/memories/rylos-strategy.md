@@ -369,6 +369,33 @@ Quattro bracci per isolare (senza i due "solo", un combinato che migliora non di
 - ⚠️ **Nemmeno `d3/q50` è un miglioramento uniforme**: il +26% di Sortino sul range completo non si ripete in ogni periodo. Vale la stessa cautela del crash guard
 - 🎯 **Sintesi decisionale**: se il criterio è la crescita nuda vince la baseline; se è il rapporto rendimento/rischio (= come si selezionano i candidati, `mem:pareto`) il combinato migliora **tutte** le metriche di rischio insieme. **Nessuna delle due è stata portata in live: decisione di Marco**
 
+### 🔍 Perché gli stop escono a −49% e non al −72,1% nominale (2026-08-09)
+Lo stoploss `−0,721` è **sullo STAKE**: con leva 4 vale **−18,02% di prezzo** (verifica: `stop_loss_abs / open_rate` = 0,8198 = 1 − 0,721/4). Ma freqtrade fissa `stop_loss_abs` sul prezzo della **PRIMA** entry e non lo sposta più; quando il DCA abbassa il prezzo medio, quel livello assoluto resta dov'è e **in termini relativi si avvicina**.
+| ingressi | caduta di prezzo allo stop | esito |
+|---|---|---|
+| 1 (i due del 10/10/2025) | **−18,02%** = nominale esatto | −72,49% |
+| 2 (gli altri 11) | **−10,6% / −12,2%** | −43% / −49% |
+- 📌 **11 stop su 13 scattano con meno di due terzi del margine per cui lo stoploss era stato ottimizzato**. È il DCA stesso a stringere il cappio: la posizione diventa più grande *e* con meno spazio, nello stesso momento
+- ⚠️ Ipotesi scartata lungo la strada: **non** è il realizzo intermedio (profit_lock/harvest/unstuck) ad ammorbidire la perdita — solo 2 stop su 13 avevano incassato qualcosa prima
+
+### ⛔ `stoploss_anchor="average"`: BOCCIATO con ablazione diretta, ora definitivo
+Il fenomeno sopra era **già documentato** (commento riga ~262 e `custom_stoploss` riga ~894) e l'opzione per correggerlo esisteva già, scartata il 2026-07-31 **su base di frequenza** («0 presenze nel top-200»). Quella classe di evidenza si è rivelata inaffidabile in entrambe le direzioni (reentry: 86,5% del top-200 e **inerte**), quindi ablazione diretta:
+| braccio | profitto | stop | perdita media | uw | sortino | peggior trade |
+|---|---|---|---|---|---|---|
+| base | +17.008% | 13 | −50,28% | 19,15% | 2,635 | −72,49% |
+| **anchor=average** | **+8.860%** | **1** | −72,49% | **24,15%** | 2,212 | −72,49% |
+| te_cg | +15.568% | 10 | −44,30% | **11,97%** | **3,283** | −49,31% |
+| te_cg + anchor | +11.193% | **0** | — | 15,68% | 3,029 | **−64,58%** |
+- ⭐⭐ **Il meccanismo funziona come previsto** (margine torna a −18,02%, stop da 13 a 1, nel combinato a **zero**) **ma il risultato dimezza e l'underwater PEGGIORA** (19,15% → 24,15%)
+- 🎯 **LEZIONE: lo stop che si stringe dopo il DCA non è un difetto, è una protezione.** Con anchor=average gli stop spariscono ma le perdite no — `te_cg_anch` ha **0 stop e un peggior trade di −64,58%**: i trade che prima uscivano a −49% restano in vita, affondano di più e tengono il capitale sott'acqua più a lungo. **Non riproporre: la porta è chiusa con misura diretta, non più per frequenza**
+- 📌 I due controlli (`base` 17.008,01% e `te_cg` 15.568,02%) hanno riprodotto i numeri esatti dei run precedenti → confronto pulito
+- 🪤 Trappola operativa: negli script su debian usare **`.venv/bin/python`**, non `python3` di sistema (numpy assente) — i backtest girano lo stesso ma il riassunto muore
+
+### 🚫 Perché NON riottimizzare col combinato (decisione 2026-08-09)
+- **La loss premia il profitto con `log × 4`**, e il combinato **sacrifica 8,5% di profitto** per comprare rischio e Sortino. Un hyperopt su quella loss vedrebbe solo il profitto perso e riporterebbe `time_exit` verso i valori lunghi o verso lo spegnimento: **smonterebbe esattamente la scelta appena fatta**
+- Il crash guard tocca **2 trade su 810**: l'ottimizzatore quasi non lo vede
+- ➡️ **O si adotta il combinato così com'è, o prima si cambia la loss** perché pesi il rischio come lo si sta pesando a mano. Riottimizzare senza toccare la loss è lavoro sprecato
+
 ## Candidato precedente: T4G (dal 2026-07-31, tag `rylos-t4g-baseline`)
 **5371 + time exit a scarico graduale**: dal 4° giorno riduce il 25% dello stake ogni 24h, chiusura totale al tetto duro di 8 giorni. Params in `user_data/candidates/t4g_2026-07-31.json` (md5 `23baf272dbd3e40fb17e9945f3bf6c75`).
 Backtest 20241205-20260731 (wallet 10k): **842 trade, +20.579,05%, dd conto 4,66%, underwater 19,15%, win 97,1%, max holding 8,0gg, durata media 10:48**. Objective −36,25841.
