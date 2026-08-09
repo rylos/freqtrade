@@ -218,7 +218,26 @@ Ipotesi: pullback con funding molto positivo = long affollati → liquidazioni �
 - Taratura corretta: `HELD_PENALTY_CAP` 4, `MAX_POSITION_HELD_DAYS` 6, `HELD_DAYS_GUARDRAIL_SCALE` 0.05, `TAIL_HOURS_SHARE_SCALE` 2.0, `MAX_RECOVERY_DAYS` 15. Swing ~1,6 punti = tie-breaker fra configurazioni comparabili, tollera al massimo ~1,5x di profitto in meno
 - Nuovo termine `TAIL_HOURS_SHARE_SCALE`: quota di ORE-TRADE oltre 3 giorni sul monte-ore totale (5371: 17,5%) — il max_held guarda un solo trade, questo misura quanto capitale resta immobilizzato
 
-## ⭐⭐ CANDIDATO LIVE ATTUALE: **T4V** (dal 2026-08-07 09:21, tag `rylos-t4v-live-20260807`)
+## ⭐⭐⭐ CANDIDATO LIVE ATTUALE: **T5** (dal 2026-08-10 00:34 CEST, tag `rylos-t5-live-20260810`)
+**T4V + tre parametri + crash guard.** Genealogia: `5371` → `T4G` → `T4V` → **`T5`**. Params in `user_data/candidates/t5_2026-08-10.json` (md5 `2b6d6c5ada49bb9fabfd8d50a3b063e7`), `.py` md5 **`15717b2ba03f378eb93a8ab601de26d3`**.
+| | T4V | **T5** |
+|---|---|---|
+| `time_exit_days` | 4 | **3** |
+| `time_exit_qty_pct` | 0,25 | **0,50** |
+| `unstuck_threshold` | 0,681 | **1,00** (unstuck di fatto spento) |
+| `crash_guard_pct` | — | **8,0** (nuovo) |
+- **Backtest 20241210-20260806, wallet 7353: 817 trade, +22.312,23%, underwater 11,97%, Sortino 6,40, drawdown conto 5,30%, win 96,7%**
+- **Contro T4V: profitto +31%, Sortino +36%, underwater −37%, peggior trade −72,49% → −49,31%, trade sotto −50% da 2 a ZERO, durata massima 8,0 → 6,0 giorni.** Migliora ogni metrica insieme
+- ✅ **Validato sui 4 sotto-periodi: Sortino migliore in 4 su 4, peggior trade in 4 su 4, underwater in 3 su 4.** Molto più robusto del solo crash guard (1 su 4)
+- **Live su amazon**: PID **186395**, `2026.8-dev-fbe94ec`, deploy **a bot flat** (0 trade aperti, 5 chiusi, realizzato −668,33), zero errori dopo il riavvio, `state=RUNNING`
+- ✅ **Trappola `.py`/`.json` verificata nel log**: `Loading parameters from file .../RyLoSStrategy.json` seguito da `time_exit_days = 3`, `time_exit_qty_pct = 0.5`, `unstuck_threshold = 1.0`, `crash_guard_pct = 8.0`. **I quattro valori vengono dal json, non dai default di classe** (vedi `mem:params-json-class-default`)
+- **Backup pre-deploy completo** in `~/backup-t4v-live-20260810/` su amazon (`.py`, `.json`, `config.json`, copia db, pip-freeze) + tag `rylos-t4v-live-20260808`
+- **Ritorno al precedente**: `git checkout rylos-t4v-live-20260808` + `cp user_data/candidates/t4v_2026-08-07.json user_data/strategies/RyLoSStrategy.json`
+- ⚠️ **Il crash guard è un'assicurazione, non rendimento atteso**: agisce in 1 sotto-periodo su 4 (quello del 10/10/2025). Il grosso del guadagno di T5 viene dallo **spegnimento dell'unstuck**
+- ⚠️⚠️ **Rischio noto e accettato**: spegnere l'unstuck ribalta un meccanismo ereditato da passivbot su un campione con **un solo crash vero**. Il rischio misurato non peggiora mai, ma lo scenario in cui l'unstuck servirebbe (discesa lunga e continua verso la liquidazione) non compare in questi 20 mesi. Il guard-stop `−0,721`, ora `market`, resta l'ultima rete
+- 📊 Plot in `/opt/freqtrade/user_data/plot/` su debian (`t5-01-ingressi-osc4rsi`, `t5-02-tmf`, `t5-03-crashguard-ret6`, `t5-04-stocastico`) — via sftp, vedi `mem:plot-delivery`
+
+## Candidato precedente: **T4V** (2026-08-07 → 2026-08-10, tag `rylos-t4v-live-20260808`)
 **T4G + `dca_tmf_weight` 0.6** (Twiggs Money Flow solo al rialzo sullo stake DCA). Genealogia: `5371` → `T4G` → **`T4V`** (time exit 4 giorni graduale + **V**olume). Params in `user_data/candidates/t4v_2026-08-07.json` (md5 `00cef67abc160a5f2cc3db8481ff1f2c`).
 - **Verifica pre-deploy col saldo reale** (`--dry-run-wallet 7353`, full range 20241205-20260807): T4G 15.137,59% / dd 4,66% / uw 19,15% / Sortino 2,50 / 813 trade → **T4V 17.008,01% / dd 4,66% / uw 19,15% / Sortino 2,64 / 810 trade**. **+12,4% a rischio identico**
 - **Live su amazon**: PID 176967, `2026.8-dev-f44881c`, avviato 2026-08-07 09:21, deploy a bot flat, zero errori, saldo 7.352,97 invariato. Log di avvio conferma `dca_tmf_weight = 0.6`, `stoploss -0.721`, `total_wallet_exposure_limit 2.929`
