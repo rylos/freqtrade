@@ -354,6 +354,21 @@ Sweep su `time_exit_days` e `time_exit_qty_pct`, range completo (baseline attual
 - ⚠️ **L'underwater resta 19,15% in TUTTE le varianti**: il time exit non tocca il rischio di coda, lo tocca solo il crash guard
 - 📌 Il time exit **costa profitto e compra qualità del rendimento**. Non è un errore da correggere: è una scelta su quale metrica ottimizzare, da fare consapevolmente
 
+### 🧪 Combinato `d3/q50` + crash guard −8% (2026-08-09, `user_data/ab7/`)
+Quattro bracci per isolare (senza i due "solo", un combinato che migliora non direbbe quale dei due lavora):
+| braccio | profitto | stop | uw | sortino |
+|---|---|---|---|---|
+| base (d4/q25) | +17.008% | 13 | 19,15% | 2,635 |
+| solo time exit | +16.409% | 12 | 19,15% | **3,315** |
+| solo crash guard | +16.136% | 11 | **14,78%** | 2,578 |
+| **combinato** | +15.568% | **10** | **11,97%** | **3,283** |
+- ⭐ **I due effetti sono INDIPENDENTI e additivi**, verificato su ogni metrica: stop 13−1−2 = 10 previsti / **10 osservati**; sortino 2,635+0,680−0,057 = 3,258 previsti / **3,283 osservati**; profitto −599−872 = −1.471 previsti / **−1.440 osservati**
+- ⭐ **L'unica interazione è a favore, sull'underwater**: previsto 14,78% (lo muove solo il crash guard), **osservato 11,97%**. Il time exit chiudendo prima le posizioni vecchie riduce l'underwater *in aggiunta*. **Si possono adottare separatamente senza sorprese**
+- **Bilancio del combinato**: uw **19,15% → 11,97% (−37%)**, stop 13 → 10, peggior trade −72,49% → −49,31%, sortino **+25%**, al prezzo di **−8,5% di profitto** finale
+- ⚠️ **Sotto-periodi (base → combinato): il profitto peggiora in 3 blocchi su 4** (−15%, −11%, −15%) e si recupera solo nel blocco del crash (+36%). Sortino: meglio in 2 blocchi (ott25-mar26 3,26→4,40; mar-ago26 3,86→5,49), **peggio nel primo (6,16→5,67)**, neutro nel secondo
+- ⚠️ **Nemmeno `d3/q50` è un miglioramento uniforme**: il +26% di Sortino sul range completo non si ripete in ogni periodo. Vale la stessa cautela del crash guard
+- 🎯 **Sintesi decisionale**: se il criterio è la crescita nuda vince la baseline; se è il rapporto rendimento/rischio (= come si selezionano i candidati, `mem:pareto`) il combinato migliora **tutte** le metriche di rischio insieme. **Nessuna delle due è stata portata in live: decisione di Marco**
+
 ## Candidato precedente: T4G (dal 2026-07-31, tag `rylos-t4g-baseline`)
 **5371 + time exit a scarico graduale**: dal 4° giorno riduce il 25% dello stake ogni 24h, chiusura totale al tetto duro di 8 giorni. Params in `user_data/candidates/t4g_2026-07-31.json` (md5 `23baf272dbd3e40fb17e9945f3bf6c75`).
 Backtest 20241205-20260731 (wallet 10k): **842 trade, +20.579,05%, dd conto 4,66%, underwater 19,15%, win 97,1%, max holding 8,0gg, durata media 10:48**. Objective −36,25841.
