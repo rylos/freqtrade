@@ -27,6 +27,7 @@ import sqlite3
 import subprocess
 import time
 import urllib.request
+from datetime import UTC, datetime
 from pathlib import Path
 
 
@@ -64,6 +65,20 @@ CAPTURE_LINES = 400
 # Misurato il 2026-08-06: la prima versione ha dato subito un falso positivo su
 # "Exception happened while polling for updates" (telegram.ext.Updater).
 TELEGRAM_RE = re.compile(r"telegram", re.IGNORECASE)
+# Stessa logica per le disconnessioni del websocket: bybit chiude la connessione a
+# intervalli irregolari (NetworkError, closing code 1006) e freqtrade rientra da
+# solo passando al REST alla candela successiva. Misurato: 5 allarmi identici fra
+# il 07 e il 10/08/2026, tutti auto-risolti in meno di 5 minuti e nessuno con
+# impatto sul trading. Un allarme che suona sempre per niente insegna a ignorarlo,
+# ed e' cosi' che si perde quello vero.
+# NON e' un silenziamento: resta un guasto se si ripete troppo nella stessa
+# finestra (problema di rete persistente) o se il fallback al REST non arriva.
+WS_RE = re.compile(r"exchange_ws")
+WS_RECOVERY_RE = re.compile(r"falling back to REST api")
+WS_TOLERATED = 3
+# Il timeframe e' 5m: se dopo una candela piena non si e' visto il fallback, il bot
+# e' rimasto senza dati e non e' piu' rumore.
+WS_FALLBACK_GRACE_MIN = 6
 # Traceback dello spegnimento manuale (Ctrl-C): normale, non e' un guasto.
 BENIGN = (
     "'NoneType' object has no attribute '_abort'",
@@ -214,6 +229,31 @@ def line_age_min(line: str) -> float | None:
     return (time.time() - t) / 60
 
 
+def ws_recovered(lines: list[str], idx: int, line: str) -> bool:
+    """True se dopo la disconnessione il bot e' rientrato via REST.
+
+    Se l'errore e' piu' recente della grazia non si puo' ancora giudicare: si
+    considera rientrato e sara' il giro successivo a dire la verita' (la finestra
+    degli errori e' piu' larga dell'intervallo del cron, quindi non si perde).
+    """
+    if any(WS_RECOVERY_RE.search(line_after) for line_after in lines[idx + 1 :]):
+        return True
+    return (line_age_min(line) or 999) < WS_FALLBACK_GRACE_MIN
+
+
+def utc_to_local(ts: object) -> str:
+    """Le date del db sono in UTC, il resto del body e' in ora locale: convertire.
+
+    Senza conversione il body accosta orari a due ore di distanza fra loro e fa
+    leggere male gli eventi (successo il 2026-08-10 su un trade di T5).
+    """
+    try:
+        dt = datetime.strptime(str(ts)[:19], "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return str(ts)[:16]
+    return dt.replace(tzinfo=UTC).astimezone().strftime("%Y-%m-%d %H:%M")
+
+
 def open_trades() -> tuple[int, str]:
     """Trade aperti nel db (fonte di verita': il db e' in WAL, i mtime non dicono nulla)."""
     if not DB.exists():
@@ -229,7 +269,7 @@ def open_trades() -> tuple[int, str]:
     if not rows:
         return 0, "nessun trade aperto"
     p, od, amt, rate = rows[0]
-    return len(rows), f"{len(rows)} aperto: {p} {amt} @ {rate} dal {str(od)[:16]}"
+    return len(rows), f"{len(rows)} aperto: {p} {amt} @ {rate} dal {utc_to_local(od)} (locale)"
 
 
 def main() -> None:  # noqa: C901
@@ -276,16 +316,39 @@ def main() -> None:  # noqa: C901
         if lines and not just_restarted:
             problems.append("nessun heartbeat nel buffer tmux")
 
-    # Errori recenti, separando il rumore Telegram dai guasti veri.
+    # Errori recenti, separando il rumore noto (Telegram, websocket rientrato) dai
+    # guasti veri. L'indice serve a cercare la ripresa nelle righe successive.
     recent = [
-        line
-        for line in lines
+        (i, line)
+        for i, line in enumerate(lines)
         if LEVEL_RE.search(line)
         and not any(b in line for b in BENIGN)
         and (line_age_min(line) or 999) <= ERROR_WINDOW_MIN
     ]
-    tg_errs = [line for line in recent if TELEGRAM_RE.search(line)]
-    errs = [line for line in recent if line not in tg_errs]
+    tg_errs = [line for _, line in recent if TELEGRAM_RE.search(line)]
+    ws_errs = [
+        (i, line) for i, line in recent if WS_RE.search(line) and not TELEGRAM_RE.search(line)
+    ]
+    ws_lines = [line for _, line in ws_errs]
+    errs = [line for _, line in recent if line not in tg_errs and line not in ws_lines]
+
+    # Websocket: rumore se isolato e rientrato, guasto se insiste o non rientra.
+    ws_stuck = [line for i, line in ws_errs if not ws_recovered(lines, i, line)]
+    if len(ws_errs) >= WS_TOLERATED:
+        problems.append(
+            f"{len(ws_errs)} disconnessioni websocket in {ERROR_WINDOW_MIN} min "
+            f"(soglia {WS_TOLERATED}): non e' piu' rumore, la rete non tiene"
+        )
+        problems.extend("  " + e[:200] for e in ws_lines[:3])
+    elif ws_stuck:
+        problems.append(
+            f"{len(ws_stuck)} disconnessioni websocket senza fallback al REST entro "
+            f"{WS_FALLBACK_GRACE_MIN} min: il bot potrebbe essere senza dati"
+        )
+        problems.extend("  " + e[:200] for e in ws_stuck[:3])
+    elif ws_errs:
+        info.append(f"{len(ws_errs)} disconnessioni websocket rientrate da sole (REST)")
+
     if errs:
         problems.append(f"{len(errs)} righe ERROR/CRITICAL negli ultimi {ERROR_WINDOW_MIN} min")
         problems.extend("  " + e[:200] for e in errs[:3])

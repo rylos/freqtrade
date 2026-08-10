@@ -22,10 +22,27 @@ file: il log vive solo nel buffer del tmux `ft`, quindi i controlli si fanno su
 sola lettura — è in WAL, i mtime non dicono nulla).
 
 Rileva: processo assente · heartbeat fermo da >10 min · stato ≠ RUNNING · righe
-ERROR/CRITICAL negli ultimi 15 min · db illeggibile. Gli errori del canale
-Telegram sono rumore di rete e vengono contati a parte, non allarmati: la prima
-versione del 2026-08-06 dava subito un falso positivo su
-`Exception happened while polling for updates`.
+ERROR/CRITICAL negli ultimi 15 min · db illeggibile.
+
+**Due classi di rumore sono escluse dall'allarme** (contate nel body del ping, così
+un'anomalia prolungata resta visibile). Il criterio è sempre lo stesso: un allarme
+che suona sempre per niente insegna a ignorarlo, ed è così che si perde quello vero.
+
+- **Errori del canale Telegram** — rete, il bot continua a operare. La prima
+  versione del 2026-08-06 dava subito un falso positivo su
+  `Exception happened while polling for updates`.
+- **Disconnessioni del websocket** (`exchange_ws`, `NetworkError` code 1006):
+  bybit chiude la connessione e freqtrade rientra da solo passando al REST alla
+  candela successiva. Fra il 07 e il 10/08/2026 hanno prodotto **5 allarmi
+  identici**, tutti auto-risolti in meno di 5 minuti, nessuno con impatto sul
+  trading. ⚠️ **Non è un silenziamento**: tornano a essere un guasto se sono ≥3
+  nella finestra di 15 min (la rete non tiene) oppure se il fallback al REST non
+  compare entro 6 minuti — una candela piena — perché lì il bot è davvero senza
+  dati. Costanti `WS_TOLERATED`, `WS_FALLBACK_GRACE_MIN`.
+
+⚠️ **Le date del db sono in UTC**, il resto del body è in ora locale: `utc_to_local()`
+converte con `astimezone()` e non con un offset fisso, altrimenti d'inverno
+sbaglierebbe di un'ora.
 
 **Riavvio automatico solo a processo ASSENTE.** Il motivo è che
 `stoploss_on_exchange` è disattivo per scelta: il guard-stop vive nel bot, quindi
