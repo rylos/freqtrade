@@ -218,6 +218,47 @@ Ipotesi: pullback con funding molto positivo = long affollati → liquidazioni �
 - Taratura corretta: `HELD_PENALTY_CAP` 4, `MAX_POSITION_HELD_DAYS` 6, `HELD_DAYS_GUARDRAIL_SCALE` 0.05, `TAIL_HOURS_SHARE_SCALE` 2.0, `MAX_RECOVERY_DAYS` 15. Swing ~1,6 punti = tie-breaker fra configurazioni comparabili, tollera al massimo ~1,5x di profitto in meno
 - Nuovo termine `TAIL_HOURS_SHARE_SCALE`: quota di ORE-TRADE oltre 3 giorni sul monte-ore totale (5371: 17,5%) — il max_held guarda un solo trade, questo misura quanto capitale resta immobilizzato
 
+## ⭐ ANATOMIA DELLE PERDITE DI T5 e tentativo di tagliare i guard-stop (2026-08-10)
+Domanda di Marco: «riusciamo a tagliare gli stoploss rimasti, o è impossibile?». Risposta misurata sull'export T5 `backtest-result-2026-08-09_22-37-15.zip` + **44 backtest** (due scansioni). **Esito: si può, ma non conviene. Deciso di lasciare tutto com'è.**
+
+### Dove stanno davvero le perdite (dati di riferimento, riusare questi)
+27 trade in perdita su 817, **−450.369 in totale**:
+| famiglia | n | P&L | ratio medio | durata mediana |
+|---|---|---|---|---|
+| guard-stop | 10 | **−202.052** | −44,3% | 55h |
+| **time_exit** | 9 | **−194.507** | −13,4% | **144h** (= tetto duro) |
+| 4rsi | 8 | −53.810 | −7,7% | 107h |
+- ⚠️ **I guard-stop sono meno della metà del problema.** Le uscite per anzianità costano quasi altrettanto, e **non sono crash**: MAE 2,19% / 3,77% / 4,37% / 7,02%, posizioni appena sott'acqua uccise dall'orologio. Muoiono tutte a 144h perché `TIME_EXIT_HARD_MULT = 2.0` × `time_exit_days = 3` = tetto duro a 6 giorni, che chiude tutto **incondizionatamente**
+- ⚠️⚠️ **Nel 2026 i guard-stop sono ZERO.** Tutti e 10 stanno fra 2024-12 e 2025-12. Le perdite del periodo recente sono interamente time_exit; il 2026Q3 chiude in negativo (−14.336) solo per quelle, e la peggior perdita non-stop di tutto il backtest è un time_exit del 2026-07-15 da −54.736. **Questo fatto spiega tutto il resto** (vedi sotto)
+- **Curva di sopravvivenza per profondità**: scendendo ≥5% sotto il carico medio vince ancora il 78,5% (n=107); ≥8% il 54,5% (n=33); ≥10% il 38,1% (n=21); ≥12% il 20,0% (n=10); **≥15% nessun trade ci arriva mai** — il guard-stop scatta prima
+- ⛔ **Tagliare più in profondo NON conviene**: chiudere tutti quelli che toccano il 10% realizzerebbe ~−295.000 contro i −214.000 che quei trade producono davvero (a 12%: −223.000 vs −191.000). **Il guard-stop è già piazzato dove il recupero smette di esistere** — i vincitori oltre il 12% portano +1.829 in tutto. Non riproporre di stringere la soglia
+- Il **peggior trade è inchiodato a −49,3%** in tutte e 44 le configurazioni provate: la profondità della coda la fissa il guard-stop, non il time exit
+- Carico: stake mediano dei guard-stop **2,41×** il normale e **10 su 10 hanno fatto DCA** — ma il quintile di stake più alto genera +1.077.546 su ~2,1M di lordo, quindi strozzare la taglia costa molto più di quanto salvi (coerente con l'ablazione B dell'ETRP)
+
+### Scansione 1: `time_exit_days` × `time_exit_qty_pct` (16 backtest, nessuna modifica al codice)
+Baseline riprodotta bit-perfetta (817 trade, +22.312,23%). **T5 (3, 0,50) resta il migliore col criterio di Marco**: filtrando su underwater ≤12% restano le quattro `days=3` più `(6, 0,25)`, e fra quelle il Sortino è 3,57 (T5) contro 3,43 / 2,95 / 1,72.
+- ⭐ **RISULTATO STRUTTURALE — sono vasi comunicanti**: allungando `days` le uscite per anzianità crollano da 9 a 1 ma il costo dei guard-stop sale da −202.052 a −324.576. Le perdite **si spostano di casella, non spariscono**. Quelle perdite non le crea il meccanismo, le crea il mercato
+- La **chiusura secca** (`qty = 1,00`) è un disastro: +14.547% e underwater 31,21% contro 11,97%. Lo scarico graduale vale moltissimo
+- `(4, 0,75)` ha il Sortino migliore (4,14) e la coda più bassa (−247.521) ma underwater **35,55%**: minimizza le perdite concentrando il rischio, profilo già scartato due volte
+- **Nota utile**: quei due parametri erano stati tarati prima che l'unstuck fosse spento e il crash guard aggiunto. Non si sono spostati
+
+### Scansione 2: il tetto duro (11 varianti, braccio ISOLATO con `--strategy-path`)
+Metodo: copia della strategia in `~/oi_research/arm/`, patch per variante, **i file veri mai toccati** (md5 `.py` `15717b2b…` e `.json` `2b6d6c5a…` verificati alla fine). Controllo riproduce T5 esatto.
+- ⛔ **Slegare `TIME_EXIT_HARD_MULT` non serve**: `mult_1.5/3.0/4.0/6.0` peggiorano tutte
+- ⛔ **Dare più tempo ai poco-sott'acqua non serve**: le `grazia_*` (tetto ×2 se `current_profit > −X`) peggiorano tutte
+- ⭐ **Funziona la direzione OPPOSTA — `anticipo`**: dimezzare il tetto quando la posizione è sotto una soglia di profondità. A −0,25: **guard-stop da 10 a 7**, profitto **+7,8%** (+24.045% vs +22.312%), e **underwater, drawdown, Sortino e peggior trade identici al centesimo**
+- Il meccanismo NON è "perdo meno": la coda totale peggiora (−487.093 vs −396.559). Il guadagno viene dai **trade in più** (830 vs 817) — con `max_open_trades=1` chiudere prima un bag condannato **libera l'unico slot**. Stessa lezione del time exit originale, applicata alla profondità invece che all'età
+
+### ❌ E perché `anticipo` è stato comunque BOCCIATO
+Criteri fissati **prima** di guardare: (a) soglia non isolata, (b) ≥4 periodi su 5 in **entrambi** i set di confini, (c) underwater mai peggiore.
+- ✅ **(a) passa**: altopiano largo da 0,18 a 0,25 (profitto +23.615 / +24.357 / +23.997 / +24.045, stop sempre 7, underwater sempre 11,97%). Il massimo è a **0,20**, non a 0,25
+- ✅ **(c) passa**: underwater identico al centesimo in **tutti e dieci** i sotto-periodi
+- ❌ **(b) fallisce: 2 su 5 in ENTRAMBI i set.** E il verso non è casuale, è **temporale**: vince ovunque nel 2025 (2025H1 +13,8%, 2025H2 +11,7%, 2025 intero +20,3%) e perde ovunque nel 2026 (2026H1 −9,5%, 2026 intero −9,6%, 2026 da marzo −14,1%)
+- **Spiegazione meccanica, ed è il punto**: nel 2026 non c'è **nessun** guard-stop, quindi un meccanismo che converte guard-stop in uscite anticipate non ha niente da prevenire — continua però a tagliare posizioni profonde che poi si sarebbero riprese. **Nessuna soglia può sistemarlo**: il problema non è dove tagli, è che non c'è più niente da salvare
+- **Lettura alternativa onesta (decisione di Marco, presa: NO)**: è un'assicurazione che paga nei periodi con crash e costa ~10% del rendimento quando non ce ne sono. Differenza col crash guard, che era stato accettato su base analoga: **il crash guard quando non serve non costa niente**, questo un premio lo paga, e lo paga proprio nel periodo su cui il bot gira adesso. Se un giorno si volesse l'assicurazione, il candidato è `anticipo_0.20`
+- 📌 **SECONDA VOLTA IN UN GIORNO che l'aggregato sul range intero è bello e lo spezzatino lo uccide** (l'altra è `rel_24h`). Il +7,8% era dominato dal 2025 esattamente come quel bootstrap era dominato dalla prima metà. **Lo spezzatino a confini sfalsati non è una formalità: è il test che decide.**
+- Script: `~/oi_research/stop_anatomy.py`, `stop_anatomy2.py`, `scan_timeexit.py`, `scan_hard.py`, `scan_anticipo.py` su debian; risultati in `scan_timeexit.json` e `scan_hard.json`
+
 ## Smart Money Concepts (LuxAlgo): SCARTATO all'analisi statica (2026-08-10)
 Vaglio senza scrivere codice, come per il volume profile. Tolto il vocabolario è un pacchetto di rotture di estremi su un'unica primitiva (pivot fractal a N barre): **BOS = breakout di Donchian** (`ta.crossover(close, pivot)` sul massimo a N barre), **CHoCH = lo stesso evento** etichettato diverso quando va contro il bias, **order block** = candela estrema della gamba prima della rottura, **premium/discount** = stocastica lenta sul range degli swing, EQH/EQL = due pivot entro 0,1·ATR(200), FVG = gap a 3 barre.
 - **Causalità**: BOS/CHoCH sono onesti (il livello è fissato N barre prima), ma i *disegni* sono retrodatati e sembrano preveggenti. `drawLevels` usa l'idioma corretto anti-repaint (`high[1]` + `lookahead_on`). ❌ **`drawFairValueGaps` legge il futuro**: chiede `high[0]/low[0]` del timeframe superiore con `lookahead_on` mentre quella barra si sta ancora formando (solo in modalità MTF; col default = timeframe del grafico il problema non c'è). ❌ La soglia FVG è `ta.cum(...)/bar_index`, **normalizzazione a finestra espansiva** → dipende da dove inizia la serie: stessa classe del bug di warmup del TMF
