@@ -64,6 +64,16 @@
 - **Decisione Marco 2026-07-22: `stoploss_on_exchange` resta DISATTIVO per ora** (proposto per proteggere il guard-stop da crash del VPS, rifiutato consapevolmente — non riproporlo, ma è il primo candidato se in live si verificano disservizi del bot)
 - Il soak test dry-run ha già scovato un bug live invisibile al backtest (unità timestamp) — vedi `mem:tech`
 
+### ⛔ Registratore dati `~/datarec/`: costruito e RIMOSSO lo stesso giorno (2026-08-10)
+Provato e tolto su decisione di Marco. **Su amazon non è rimasto niente**: crontab con le sole due righe del watchdog, directory cancellata. Non riproporlo senza una ragione nuova.
+- Cosa faceva: cron `*/5`, snapshot hyperliquid (`metaAndAssetCtxs`), archiviazione delle candele 5m prima che scadessero, OI bybit. ~30 KB/giorno
+- **Perché era stato proposto**: hyperliquid non conserva storico (vedi `mem:rylos-strategy`), quindi "o registriamo da ora o quei dati non esisteranno mai"
+- **Perché è caduto — argomento da ricordare, vale in generale**: (1) la giustificazione era l'opzione di ricerca futura su book/CVD/liquidazioni, ma l'**open interest è stato bocciato quello stesso giorno** e quelle sono la stessa famiglia → stavo conservando dati per una linea la cui probabilità era appena scesa; (2) **non serviva nemmeno per il backtest su hyperliquid**: fra un anno avrei un anno di storia contro i 20 mesi puliti che bybit già dà sullo stesso asset, e il prezzo di HYPE sulle due sedi è lo stesso. ⚠️ Diffidare del ragionamento "costa poco, un giorno servirà": è quello che fa accumulare infrastruttura senza un utente
+- 📌 **Domanda operativa rimasta aperta** (l'unica ragione che reggeva davvero): `impactPxs` di hyperliquid è una misura di **profondità del book** gratis, e la profondità è un problema già visto — l'08/08 i primi 2 livelli bid coprivano ~37 HYPE contro una posizione di 260 (14%) e un'uscita ha impiegato 4 min 10 s. Man mano che il wallet cresce la domanda "la posizione sta diventando grande per il book?" torna. Se un giorno serve, si registra allora, con quello scopo dichiarato e solo quel campo
+
+### Storico open interest bybit: si scarica, ma `since` non funziona
+⚠️ L'endpoint v5 `market/open-interest` **ignora `since`** e torna sempre gli ultimi 200 record. Si pagina **all'indietro con `until`** (o col `nextPageCursor` grezzo), 200 record per pagina. Così l'OI **a 5m arriva fino alla nascita del perp**: HYPE dal 2024-12-05, 176.528 record, copertura 100,00%, zero buchi, ~7 minuti di scarico. Script `~/oi_download.py` su debian, output in `~/oi_research/`. Hyperliquid invece non ha alcuno storico di OI: solo `metaAndAssetCtxs` in tempo reale.
+
 ## pc-work / pc-casa
 - pc-work: sviluppo, `/home/marco/dev/freqtrade`
 - pc-casa: `ssh -p 22222 marco@home.ziliani.net`; screenshot in `/home/marco/Immagini/Schermate/` (recuperare con scp quando li cita)
