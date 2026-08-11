@@ -310,6 +310,25 @@ Verificato via API su richiesta di Marco ("in futuro deve funzionare anche su hy
 - ⚠️ Esiste (per mia conoscenza pregressa, **NON verificato — non l'ho toccato**) un archivio S3 `hyperliquid-archive` con book e trade grezzi, ma è **requester-pays**, cioè addebita sull'account AWS di Marco. **Non riproporlo**: alla sola menzione Marco ha reagito male, giustamente perché sembrava un'azione fatta invece che una proposta
 - ⚠️ Un registratore per accumulare questi dati da oggi in avanti è stato costruito e **RIMOSSO lo stesso giorno** su decisione di Marco: l'argomento contrario, che vale in generale, sta in `mem:servers`
 
+## ⛔ GRVT: SCARTATA per LIQUIDITÀ, non per rendimento (2026-08-11/12)
+Marco voleva portare T5 live su GRVT/USDT:USDT tenendo HYPE da parte per riprenderla dopo. **Preparazione fatta, switch NON eseguito**: alla vista dei numeri del book ha deciso di ripartire su HYPE ("come non detto, fai ripartire HYPE"). Il bot è stato fermato e riavviato su HYPE alle 01:12 del 12/08 (PID 203266), config mai modificata.
+- **Il backtest era positivo e non conta niente**: 9 trade, **+509,73 USDT (+6,80%)**, 7/2, profit factor 2,02, Sortino 8,10 — ma su **6 giorni utili**. GRVT è nata su bybit il **31/07/2026**: 3.295 candele 5m, e le 1.500 di `startup_candle_count` se ne mangiano 5 giorni. `Mean profit p-value 0,5085`, SQN 0,69, e **un solo trade da −18,40% che vale l'intero drawdown**. Il CAGR 5.379% è l'artefatto di annualizzare una settimana
+- ⭐ **Il motivo vero della bocciatura — profondità del book, misurata lato bid**:
+
+  | entro | GRVT | HYPE |
+  |---|---|---|
+  | ±0,10% | 1.244 USDT | 396.595 |
+  | ±0,50% | **7.236 USDT** | 2.962.454 |
+  | ±1,00% | 28.127 USDT | 4.695.542 |
+
+  **~400 volte più sottile.** Con `tradable_balance_ratio 1.0` la TWE 2,929 su un wallet di 7.500 porta il nozionale fino a **~21.900 USDT**: per uscirne servirebbe tre volte tutto il book entro mezzo punto. I primi 2 livelli — quelli su cui la strategia piazza i limit (`order_book_top 2`) — valgono **16 USDT**. Il volume 24h (13,9 M USDT) inganna: il tick da 1e-5 su un prezzo di 0,32 è 3 bps, quindi il book è spalmato su centinaia di livelli e "top N livelli" non misura niente — **misurare sempre per banda di prezzo, non per numero di livelli**
+- 📌 **Il backtest non vede nulla di tutto questo**: riempie ai prezzi delle candele con slippage zero. Un +6,80% su una coin illiquida è un numero senza contropartita nel mondo reale. È lo stesso problema già visto su HYPE l'08/08 (2 livelli = 37 HYPE su 260 di posizione), ma due ordini di grandezza peggio
+- 🔧 **La leva giusta se un giorno serve una coin sottile**: `tradable_balance_ratio` nel config. `custom_stake_amount` dimensiona su `wallets.get_total_stake_amount()`, che in freqtrade è già `(stake dei trade aperti + saldo libero) × tradable_balance_ratio` → **una riga di config scala tutta la griglia** senza toccare strategia né params. Con 0.25 il nozionale massimo scendeva a ~5.500 USDT (primo ordine ~495), dentro il ±0,5% del book
+- ⚠️ **Margine di liquidazione più stretto**: MMR di GRVT 2,5-3,1% contro l'1% di HYPE → a 4x la liquidazione sta a ~−22% di prezzo contro il guard-stop a −18%. Quattro punti di cuscino invece di sei. Il `riskLimitValue 5000` di tier 1 **non è un vincolo**: su UTA bybit sale da solo, come dimostrano le posizioni HYPE da 14k già passate
+- ✅ **T5 è pair-agnostica**: `HYPE` compare nel `.py` una sola volta, in un commento. Cambiare coin è una riga di whitelist, il codice non si tocca
+- 🧰 Artefatti su debian: plot in `user_data/plot/grvt-0[0-4]-*.html` (profit, ingressi+`osc_4rsi`, `tmf_z`, `ret6_pct`, `stoch_k`). Dir di lavoro `user_data/grvt_test/` cancellata
+- 📌 **Quando riconsiderarla**: serve almeno un trimestre di storia (non prima di novembre 2026) **e** un book che regga il nozionale pieno. Il primo arriva col tempo, il secondo no — è quello da guardare per primo
+
 ## ⭐⭐⭐ CANDIDATO LIVE ATTUALE: **T5** (dal 2026-08-10 00:34 CEST, tag `rylos-t5-live-20260810`)
 **T4V + tre parametri + crash guard.** Genealogia: `5371` → `T4G` → `T4V` → **`T5`**. Params in `user_data/candidates/t5_2026-08-10.json` (md5 `2b6d6c5ada49bb9fabfd8d50a3b063e7`), `.py` md5 **`15717b2ba03f378eb93a8ab601de26d3`**.
 | | T4V | **T5** |
