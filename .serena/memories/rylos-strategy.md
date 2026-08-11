@@ -218,6 +218,19 @@ Ipotesi: pullback con funding molto positivo = long affollati → liquidazioni �
 - Taratura corretta: `HELD_PENALTY_CAP` 4, `MAX_POSITION_HELD_DAYS` 6, `HELD_DAYS_GUARDRAIL_SCALE` 0.05, `TAIL_HOURS_SHARE_SCALE` 2.0, `MAX_RECOVERY_DAYS` 15. Swing ~1,6 punti = tie-breaker fra configurazioni comparabili, tollera al massimo ~1,5x di profitto in meno
 - Nuovo termine `TAIL_HOURS_SHARE_SCALE`: quota di ORE-TRADE oltre 3 giorni sul monte-ore totale (5371: 17,5%) — il max_held guarda un solo trade, questo misura quanto capitale resta immobilizzato
 
+## Quanto tempo può stare fermo senza trade (misurato 2026-08-11)
+Domanda nata dal live: 31 ore senza un'entry, è normale? Sì. Backtest T5 sul range intero (817 trade, 2024-12-10 → 2026-08-06), vuoto = `open_date` del trade N+1 meno `close_date` del trade N (con `max_open_trades=1` è esattamente il tempo a conto flat).
+
+| mediana | p75 | p90 | p95 | p99 | max |
+|---|---|---|---|---|---|
+| 4,0 h | 9,2 h | 15,5 h | 21,9 h | 41,2 h | **70,8 h (2,95 gg)** |
+
+- Vuoti > 24h: 34 su 816 (4,2%). > 48h: 5 (0,6%). **Mai oltre 3 giorni** in 20 mesi
+- I cinque più lunghi: 09-12/04/2026 (70,8h), 02-04/07/2026 (54,8h), 25-27/10/2025 (52,3h), 04-06/08/2026 (50,6h — successo davvero sul bot live), 02-04/05/2026 (49,1h)
+- ⚠️ **Le attese si allungano strutturalmente**: mediana per trimestre 1,2h (2024Q4) → 5,2h (2026Q1) → 8,7h (2026Q3); trade/mese da ~90 (dic 2024-gen 2025) a 13-45 nel 2026. Non è un guasto: è HYPE meno volatile e quattro condizioni da soddisfare insieme. **Va tenuto presente quando si confronta la frequenza live con quella del backtest full-range: la media è dominata dal 2025.**
+- **Soglia operativa: oltre 72 ore di flat siamo fuori da tutto lo storico** → allora vale la pena verificare che il bot stia davvero valutando le candele (errore silenzioso dell'exchange, dataprovider fermo). Sotto, non c'è niente da indagare
+- Script `~/oi_research/gaps.py` su debian (output `gaps.out`), cancella da sé l'export del backtest
+
 ## ⭐ ANATOMIA DELLE PERDITE DI T5 e tentativo di tagliare i guard-stop (2026-08-10)
 Domanda di Marco: «riusciamo a tagliare gli stoploss rimasti, o è impossibile?». Risposta misurata sull'export T5 `backtest-result-2026-08-09_22-37-15.zip` + **44 backtest** (due scansioni). **Esito: si può, ma non conviene. Deciso di lasciare tutto com'è.**
 
