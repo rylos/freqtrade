@@ -326,11 +326,73 @@ Marco voleva portare T5 live su GRVT/USDT:USDT tenendo HYPE da parte per riprend
 - 🔧 **La leva giusta se un giorno serve una coin sottile**: `tradable_balance_ratio` nel config. `custom_stake_amount` dimensiona su `wallets.get_total_stake_amount()`, che in freqtrade è già `(stake dei trade aperti + saldo libero) × tradable_balance_ratio` → **una riga di config scala tutta la griglia** senza toccare strategia né params. Con 0.25 il nozionale massimo scendeva a ~5.500 USDT (primo ordine ~495), dentro il ±0,5% del book
 - ⚠️ **Margine di liquidazione più stretto**: MMR di GRVT 2,5-3,1% contro l'1% di HYPE → a 4x la liquidazione sta a ~−22% di prezzo contro il guard-stop a −18%. Quattro punti di cuscino invece di sei. Il `riskLimitValue 5000` di tier 1 **non è un vincolo**: su UTA bybit sale da solo, come dimostrano le posizioni HYPE da 14k già passate
 - ✅ **T5 è pair-agnostica**: `HYPE` compare nel `.py` una sola volta, in un commento. Cambiare coin è una riga di whitelist, il codice non si tocca
-- 🧰 Artefatti su debian: plot in `user_data/plot/grvt-0[0-4]-*.html` (profit, ingressi+`osc_4rsi`, `tmf_z`, `ret6_pct`, `stoch_k`). Dir di lavoro `user_data/grvt_test/` cancellata
+- 🧰 Artefatti su debian **rimossi il 2026-08-12** nella pulizia (plot `grvt-*`, dati 5m GRVT, dir di lavoro): se serve si riscarica in 10 minuti, la coin resta scartata
 - 📌 **Quando riconsiderarla**: serve almeno un trimestre di storia (non prima di novembre 2026) **e** un book che regga il nozionale pieno. Il primo arriva col tempo, il secondo no — è quello da guardare per primo
 
+## 🔎 SCREENING COIN ALTERNATIVE A HYPE (2026-08-12) — sopravvive solo ZEC, e serve un hyperopt suo
+Richiesta di Marco: una coin «con volume sufficiente e molta volatilità, un po' come HYPE agli inizi». Universo bybit intero, poi backtest veri.
+- **Profilo di HYPE agli inizi (dic24-giu25), il bersaglio**: volatilità annualizzata **127%**, range giornaliero 11,26%, dip mediano 24h 4,01%, 62,5% del tempo in un dip >3%. Oggi HYPE sta a **94% / 6,82% / 2,56% / 42,6%**
+- **Imbuto**: 518 perp USDT (esclusi i TradFi) → 45 con storia ≥180gg e volume ≥10M → misurati book e volatilità su tutti. ⭐ **Compromesso strutturale: le coin con la volatilità degli inizi hanno book da 5-90k** (BEAT vol 300% ma book 24k, VELVET 314%/10k, AKE 272%/10k, KAITO 110%/43k) — la trappola GRVT/CYS. Il nozionale pieno nostro è ~21.900
+- **T5 così com'è su 15 coin** (gen2025→ago2026, wallet 7489): **perdono tutte**. HYPE +6.574% (uw 11,97%) · PUMPFUN +28% · XMR −15% · AAVE −32% · ENA −48% · **ZEC −74% col mercato a +726%** · WLD −80% · NEAR −84% · FARTCOIN −100%. Underwater fra 63% e 100% ovunque. **Conferma su 15 coin il giro cross-coin di luglio: i 27 parametri sono la microstruttura di HYPE**
+- 🎯 **E il motivo NON è che manchino i pullback**: misurando il segnale d'ingresso vero e l'esito successivo (senza la griglia), il dip comprato paga ovunque — HYPE inizi 85,2% di recuperi del +2,5% prima di un −18%, HYPE oggi 74,7%, ZEC 73,4%, FARTCOIN 78,3%, SUI 63,2%. **A distruggere il risultato sono il drift** (long-only con griglia non sopravvive a una coin che perde l'85%) **e i guard-stop**, che su ZEC diventano 26 (−38.026) contro +32.881 dei 632 vincenti: la distanza dello stop (−18% di prezzo) è tarata su una volatilità del 101%, non del 131%
+- ❌ **Su ZEC non è questione di taglia**: stop più largo (−0,85) → −86% e peggior trade −85%; primo ordine dimezzato → −46%; profit factor sempre 0,80-0,86
+- ⭐ **ZEC è l'unica candidata vera**: volatilità **131%**, range 9,22%, book **1,09 M+ entro ±0,5%** (150 volte CYS), volume 104 M, drift **+768%** da gen 2025, edge sul pullback 73,4% (HYPE 74,7%). Tutte le altre cadono su book, volatilità o drift. **Serve un hyperopt dedicato** — Marco: «ZEC mi convince ma prima analizziamo alcune idee». Dati 5m ZEC tenuti su debian
+- 🪤 **Trappola operativa per quando si farà**: bybit espone i risk-limit in blocco solo per 750 simboli e **ZEC, WLD e XMR non ci sono** → `freqtrade backtesting` (e quindi anche l'hyperopt) muore con `got no leverage tiers available`. Aggirato con un driver che recupera i tier uno a uno (`fetch_market_leverage_tiers`) monkeypatchando `Bybit.get_leverage_tiers`; il file in `/tmp` è stato cancellato, **va rifatto per bene se si procede**
+
+## ⚖️ DUE COIN IN UN BOT SOLO: BOCCIATO, semmai due bot separati (2026-08-12)
+Idea di Marco: `max_open_trades=2` con TWE diviso per due, per avere HYPE e ZEC insieme. **La strategia lo implementa già** (`per_pair_limit = global_limit / max_open_trades`, riga 503) — ma `first_order_pct` è una percentuale del balance **totale**, non del limite per pair.
+- **Misura isolata (stessa coin, stessi params, cambia solo `max_open_trades`)**: 1 slot +6.574,10% / PF 4,63 / peggior −49,31% / stake medio 14.508 → **2 slot +303,78% / PF 2,00 / peggior −73,48% / stake medio 1.332**. **Ventun volte meno profitto**
+- **Meccanismo**: col tetto dimezzato il terzo fill (che da solo è il **66% della posizione piena**) non ci sta più → griglia da iniziale+2 DCA a iniziale+1 → meno media abbassata → lo stop scatta al nominale pieno. Rimediare dimezzando `first_order_pct` significa spostare tre parametri co-ottimizzati **sulla cresta stretta** già mappata: è un altro hyperopt, non una manopola
+- ✅ **Il capitale invece si divide senza penalità**: HYPE a 7489 / 3744 / 1872 dà +6.574,10 / +6.573,98 / +6.573,63%, stesse 727 operazioni, stesso underwater. **La strategia è scale-invariant**
+- 📌 **Due bot separati** (sub-account, wallet, db, tmux, watchdog e check propri) risolvono anche il problema dei parametri: un'istanza = un solo json, e ramificare sul nome della pair porterebbe l'hyperopt a 54 parametri con wallet comunque condiviso (un disastro di ZEC restringerebbe la griglia di HYPE). Se si parte, **fetta piccola su ZEC** (1.500-2.000 su 7.489), non 50/50
+
+## ⭐⭐ EMERGENCY DCA: anatomia, un BUG VERO e la soglia che è un picco (2026-08-12)
+Domanda di Marco: «gli 82 emergency DCA non si potrebbero tarare meglio? credo siano loro a fare la differenza anche sui loss». **Risposta: sono loro a LIMITARE le perdite, la soglia è già ottima — ma nel cercare ho trovato un errore di conto vero.** Tutto su braccio isolato, range `20241210-20260806`, wallet 7353 (baseline 816 trade / +22.223,91%; il riferimento in memoria dà 817 / +22.312,23%, un trade di scarto dovuto al taglio finale).
+
+### Anatomia (export T5 `backtest-result-2026-08-09_22-37-15.zip`)
+Ordini di acquisto: **817 iniziali, 134 DCA normali, 82 emergency** (= 38% di tutti i DCA).
+| composizione griglia | trade | P&L | ratio medio | win | stop | durata mediana |
+|---|---|---|---|---|---|---|
+| solo ingresso iniziale | 652 | +922.452 | +6,5% | 99,1% | 0 | 2,5h |
+| con DCA normali | 83 | +683.986 | +7,9% | **100%** | 0 | 2,9h |
+| con emergency | 82 | +34.180 | −2,3% | 74,4% | **10** | 26,2h |
+- ⚠️ **Tutti e 10 i guard-stop hanno esattamente UN emergency e ZERO DCA normali.** Ma è un marcatore, non una causa: l'emergency scatta per definizione dopo una caduta del 9% dall'ultimo fill. **Trappola già vista col DCA guard** (bias di selezione sul momento di misura)
+- ✅ **Ablazione: emergency spento → +1.590,02%** contro +22.223,91%, PF 4,63 → 2,45, **peggior trade −49,31% → −73,48%**, 816 → 664 trade. **Spegnerlo costa 14 volte il rendimento**: è il fill che abbassa la media e trasforma uno stop nominale pieno in uno da −49%. Stessa lezione del DCA guard: **il DCA che compra in discesa è la difesa**
+
+### La soglia è un PICCO, non un altopiano
+Trigger effettivo = `emergency_dca_threshold × emergency_critical_multiplier` = −6,7% × 1,31 = **−8,78%** dall'ultimo fill. Scansione (8 varianti isolate):
+| trigger | profitto | PF | Sortino | underwater | peggior |
+|---|---|---|---|---|---|
+| −6,55% | +3.107% | 1,87 | 0,89 | **59,44%** | −55,52% |
+| −7,70% | +2.865% | 2,35 | 1,29 | **44,36%** | −51,99% |
+| **−8,78% (T5)** | **+22.224%** | **4,63** | **3,56** | **11,97%** | **−49,31%** |
+| −10,05% | +5.305% | 3,30 | 2,47 | 23,70% | −72,56% |
+| −11,73% / −13,40% / −15,72% | ~+1.900-2.000% | 2,1-2,6 | 1,2-2,9 | 8-19% | **−72,6%** |
+- **Ogni direzione costa da 4 a 12 volte il rendimento, e i due versi falliscono per motivi opposti**: più permissivo compra troppo e l'underwater esplode al 44-59%; più restrittivo il fill salvifico non arriva e il peggior trade torna al **−72,56% nominale**
+- ⚠️ Ennesimo parametro su una **cresta stretta** (come TWE, `dca_multiplier`, `first_order_pct`): sta dalla parte giusta ma senza margine. Non toccarlo a naso
+- ❌ **TMF sull'emergency** (il ramo esce prima e si perde la modulazione della riga ~845): +22.477,17% contro +22.223,91% = **+1,1%, dentro il rumore**, rischio identico al centesimo. Non vale una modifica al `.py`
+
+### 🐞 IL BUG: la leva contata due volte nel ramo emergency (corretto, commit `203a913d5`)
+`current_position_value = sum(order.cost) * 4` — ma per i futures **`order.cost` è già il nozionale** (amount × prezzo) e per giunta **non tiene conto delle clip già vendute**. Verificato sul trade 211: somma dei cost 65.309 → il codice ne faceva **261.236**, mentre `get_total_position_value()` (stake × 4) dava **32.634**.
+- **Effetto**: col valore gonfiato il tetto per pair risulta sfondato dal secondo emergency in poi → `remaining_per_pair` negativo → **stake negativo** → il ramo non fa nulla **in silenzio**. Ecco perché gli 82 emergency stanno in 82 trade distinti: **non era una scelta di progetto, era un errore**
+- Il DCA normale (riga ~832) usava già `trade.stake_amount * 4`, corretto. Era l'unico punto del file che misurava così
+- ✅ **Correzione bit-perfetta** (816 trade, +22.223,91%, uw 11,97%, Sortino 3,56, PF 4,63): a gate `n_entries < max_orders` invariato il comportamento non cambia. **In live dal 2026-08-12**, vedi `mem:servers`
+
+### ❌ E perché il SECONDO emergency resta chiuso
+Aprendo il gate (`n_entries <= max_orders`) **sopra la correzione**: +27.429,94% (+23,4%), PF 5,36, Sortino 3,72, peggior −48,64% — ma **underwater 11,97% → 14,80%**. Spezzatino (base → variante):
+| periodo | profitto | underwater | Sortino |
+|---|---|---|---|
+| dic24-mag25 | 2.102,03 → 2.101,60 | 11,97 → **14,80** | 6,76 → **5,01** |
+| mag-ott25 | 54,42 → 58,35 | 11,90 → **14,28** | 1,13 → **1,04** |
+| **ott25-mar26** | **237,02 → 325,96** | 11,81 = | 5,33 → 7,41 |
+| mar-ago26 / 2026 intero | **identici** | = | = |
+| mar-set25 *(sfalsato)* | 243,09 → 240,53 | 11,97 → **14,80** | 2,16 → **1,80** |
+| set25-mar26 *(sfalsato)* | 256,05 → 350,02 | 11,81 = | 4,15 → 5,45 |
+- **Stessa firma di `anticipo`**: tutto il guadagno viene da UNA finestra (il crash di fine 2025, contata due volte dai due set di confini), nel 2026 non tocca **niente**, e dove non aggiunge profitto peggiora l'underwater di 2,8 punti. **Criterio (c) di Marco fallito → scartato**
+- 📐 **Perché il mercato quasi non la userebbe comunque**: fra il trigger del secondo emergency e il guard-stop ci sono **1,10% di prezzo mediani** (in 2 casi su 10 il trigger sta *sotto* lo stop). In 7 stop su 10 la candela che apre nella zona è la stessa che rompe lo stop. In 20 mesi il callback vede quella condizione **42 volte in tutto**. Allargare la finestra vorrebbe dire spostare il guard-stop, già misurato due volte come peggiorativo (stoploss −0,80 e `anchor=average`)
+
 ## ⭐⭐⭐ CANDIDATO LIVE ATTUALE: **T5** (dal 2026-08-10 00:34 CEST, tag `rylos-t5-live-20260810`)
-**T4V + tre parametri + crash guard.** Genealogia: `5371` → `T4G` → `T4V` → **`T5`**. Params in `user_data/candidates/t5_2026-08-10.json` (md5 `2b6d6c5ada49bb9fabfd8d50a3b063e7`), `.py` md5 **`15717b2ba03f378eb93a8ab601de26d3`**.
+**T4V + tre parametri + crash guard.** Genealogia: `5371` → `T4G` → `T4V` → **`T5`**. Params in `user_data/candidates/t5_2026-08-10.json` (md5 `2b6d6c5ada49bb9fabfd8d50a3b063e7`). ⚠️ **`.py` md5 aggiornato al 2026-08-12: `7260e244fb5a78cc434ffe6200bc8eac`** (tag `rylos-t5fix-live-20260812`, commit `203a913d5` = fix del conteggio nel ramo emergency, regressione bit-perfetta — vedi sezione sopra). Il md5 storico `15717b2ba03f378eb93a8ab601de26d3` vale fino al tag `rylos-t5-live-20260810`.
 | | T4V | **T5** |
 |---|---|---|
 | `time_exit_days` | 4 | **3** |
