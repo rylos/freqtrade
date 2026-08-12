@@ -329,6 +329,29 @@ Marco voleva portare T5 live su GRVT/USDT:USDT tenendo HYPE da parte per riprend
 - 🧰 Artefatti su debian **rimossi il 2026-08-12** nella pulizia (plot `grvt-*`, dati 5m GRVT, dir di lavoro): se serve si riscarica in 10 minuti, la coin resta scartata
 - 📌 **Quando riconsiderarla**: serve almeno un trimestre di storia (non prima di novembre 2026) **e** un book che regga il nozionale pieno. Il primo arriva col tempo, il secondo no — è quello da guardare per primo
 
+## ⭐⭐⭐ IL LIVE NON ERA IL BACKTEST: un callback per candela (2026-08-12, commit `23c621934`)
+Nato da una domanda di Marco sull'idea di agire dentro la candela. **È il risultato più importante della sessione, e forse del progetto dopo il TMF.**
+
+### La misura
+`--timeframe-detail 1m` simula l'interno di ogni candela: è il modello di come opera il bot vero (ciclo ~5s), mentre il backtest 5m valuta i callback **una sola volta per candela**. Stesso codice, stessi params, range `20241210-20260806`, wallet 7353:
+| | profitto | PF | Sortino | underwater | peggior | trade |
+|---|---|---|---|---|---|---|
+| backtest 5m (il modello su cui abbiamo validato TUTTO) | +22.223,91% | 4,63 | 3,56 | 11,97% | −49,31% | 816 |
+| **dettaglio 1m = come girava il bot** | **+509,89%** | 1,77 | 0,95 | **30,66%** | **−70,20%** | 741 |
+| dettaglio 1m **col gate** | **+22.223,91%** | 4,63 | 3,56 | 11,97% | −49,31% | 816 |
+- **43 volte di rendimento, e l'identità col gate è bit-perfetta**: l'intero divario era la frequenza di valutazione, **non** l'ottimismo sui riempimenti (ipotesi che avevo fatto e che i dati hanno smentito)
+- **Cosa cambiava meccanicamente**: DCA normali **134 → 49**, guard-stop **10 → 15**, e **l'83% dei fill cadeva dentro la candela** (timestamp non allineati ai 5m) contro lo 0% del backtest
+- 📌 **Spiega la divergenza del drift check del 04/08** («live 3 entry contro 2 del backtest, posizione ~3x»), archiviata allora come sensibilità del percorso wallet/griglia. Non era quello: chi guarda più spesso compra diversamente
+- ⚠️ Sul solo periodo recente (mag-ago 2026) il divario è molto minore (+66,83% → +38,66%): è il **compounding su 603 giorni** ad amplificarlo. Non leggere il 43x come "il bot perdeva 43 volte"
+
+### Il rimedio (e perché NON è `process_throttle_secs`)
+Nessuna opzione di config allinea i callback alla chiusura: `process_only_new_candles` governa solo `analyze_pair` (indicatori), la FAQ non ne parla, l'issue **12475** è aperta senza risposta. La doc rimanda a «strict logic» nella strategia — **la tecnica giusta è il gate nel codice** (intuizione di Marco, la mia prima proposta era sbagliata).
+- `_new_candle_for(key, pair)` confronta l'ultima data del dataframe analizzato con quella già vista, per `("adj", trade.id)` e `("exit", trade.id)`. Gate su **entrambi** i callback: col solo `adjust_trade_position` si recuperava fino a +11.619,08% (rischio già identico), serve anche `custom_exit` per l'identità esatta
+- ✅ **In backtest è un no-op** (un callback per candela è già la regola) → regressione bit-perfetta a 5m: nessuna delle decisioni prese finora va rivista
+- ✅ **Non tocca le protezioni**: guard-stop (stop nativo + `custom_stoploss`) e `manage_open_orders` restano a ogni ciclo. Era il difetto della via `internals.process_throttle_secs = 300`, che avrebbe portato la reazione dello stop a 5 minuti e i timeout di uscita da 6 a 15 minuti
+- ⚠️ Lo stato non sopravvive al riavvio (come da doc per i dizionari di istanza): dopo un restart la prima valutazione della candela successiva agisce. Se il dataframe si bloccasse, il gate congela DCA e uscite ma **non** lo stop — verso prudente, coperto dal watchdog
+- 🧰 Da qui in poi **ogni valutazione seria va fatta anche col dettaglio 1m**: dati HYPE 1m scaricati su debian (879.255 candele dal 2024-12-10)
+
 ## 🔎 SCREENING COIN ALTERNATIVE A HYPE (2026-08-12) — sopravvive solo ZEC, e serve un hyperopt suo
 Richiesta di Marco: una coin «con volume sufficiente e molta volatilità, un po' come HYPE agli inizi». Universo bybit intero, poi backtest veri.
 - **Profilo di HYPE agli inizi (dic24-giu25), il bersaglio**: volatilità annualizzata **127%**, range giornaliero 11,26%, dip mediano 24h 4,01%, 62,5% del tempo in un dip >3%. Oggi HYPE sta a **94% / 6,82% / 2,56% / 42,6%**
@@ -392,7 +415,7 @@ Aprendo il gate (`n_entries <= max_orders`) **sopra la correzione**: +27.429,94%
 - 📐 **Perché il mercato quasi non la userebbe comunque**: fra il trigger del secondo emergency e il guard-stop ci sono **1,10% di prezzo mediani** (in 2 casi su 10 il trigger sta *sotto* lo stop). In 7 stop su 10 la candela che apre nella zona è la stessa che rompe lo stop. In 20 mesi il callback vede quella condizione **42 volte in tutto**. Allargare la finestra vorrebbe dire spostare il guard-stop, già misurato due volte come peggiorativo (stoploss −0,80 e `anchor=average`)
 
 ## ⭐⭐⭐ CANDIDATO LIVE ATTUALE: **T5** (dal 2026-08-10 00:34 CEST, tag `rylos-t5-live-20260810`)
-**T4V + tre parametri + crash guard.** Genealogia: `5371` → `T4G` → `T4V` → **`T5`**. Params in `user_data/candidates/t5_2026-08-10.json` (md5 `2b6d6c5ada49bb9fabfd8d50a3b063e7`). ⚠️ **`.py` md5 aggiornato al 2026-08-12: `7260e244fb5a78cc434ffe6200bc8eac`** (tag `rylos-t5fix-live-20260812`, commit `203a913d5` = fix del conteggio nel ramo emergency, regressione bit-perfetta — vedi sezione sopra). Il md5 storico `15717b2ba03f378eb93a8ab601de26d3` vale fino al tag `rylos-t5-live-20260810`.
+**T4V + tre parametri + crash guard.** Genealogia: `5371` → `T4G` → `T4V` → **`T5`**. Params in `user_data/candidates/t5_2026-08-10.json` (md5 `2b6d6c5ada49bb9fabfd8d50a3b063e7`). ⚠️ **`.py` md5 attuale: `6b16e514777b3b55251c719cfba9ae6a`** (tag `rylos-t5gate-live-20260812`, commit `23c621934` = gate un-callback-per-candela). Prima: `7260e244…` (tag `rylos-t5fix-live-20260812`, commit `203a913d5`, fix del conteggio nel ramo emergency). Entrambi con **regressione bit-perfetta**, quindi il candidato T5 è invariato: cambia solo che il live ora si comporta come il backtest. Il md5 storico `15717b2ba03f378eb93a8ab601de26d3` vale fino al tag `rylos-t5-live-20260810`.
 | | T4V | **T5** |
 |---|---|---|
 | `time_exit_days` | 4 | **3** |
