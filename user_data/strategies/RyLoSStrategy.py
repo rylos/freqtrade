@@ -766,7 +766,6 @@ class RyLoSStrategy(IStrategy):
         per_pair_limit = global_limit / max_open_trades
         current_global_exposure = self.get_total_position_value()
         exposure_ratio = trade.stake_amount * 4 / per_pair_limit if per_pair_limit > 0 else 0.0
-        filled_entries = trade.select_filled_orders(trade.entry_side)
 
         if (
             current_loss_from_last <= self.emergency_dca_threshold.value
@@ -786,11 +785,17 @@ class RyLoSStrategy(IStrategy):
                 )
                 emergency_stake = total_balance * stake_pct
 
-                # Calcola stake totale della posizione (inclusi DCA)
-                total_stake = sum(order.cost for order in filled_entries if order.cost)
-
-                # Controlli sicurezza per Emergency DCA (riduce stake se necessario)
-                current_position_value = total_stake * 4
+                # Controlli sicurezza per Emergency DCA (riduce stake se necessario).
+                # La posizione si misura come nel ramo DCA normale (riga ~832):
+                # `order.cost` è GIÀ il nozionale (amount x prezzo) e non tiene
+                # conto delle clip già vendute, quindi sommarlo e moltiplicarlo
+                # per la leva gonfiava il valore di 4 volte e oltre. Col valore
+                # gonfiato il tetto per pair risultava sfondato dal secondo
+                # emergency in poi, `remaining_per_pair` usciva negativo e il
+                # ramo non faceva nulla in silenzio (mai due emergency nello
+                # stesso trade). A parità di gate il comportamento non cambia
+                # (regressione bit-perfetta), ma il conto ora è giusto.
+                current_position_value = trade.stake_amount * 4
                 emergency_position_value = emergency_stake * 4
 
                 # Verifica limite per pair - RIDUCE invece di bloccare
