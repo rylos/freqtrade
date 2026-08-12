@@ -312,6 +312,7 @@ class RyLoSStrategy(IStrategy):
     # Cache per-epoch (svuotate in populate_entry_trend)
     _extremes_cache: dict = {}
     _fill_cache: dict = {}
+    _candle_seen: dict = {}
     # Nessuno stato di cooldown in memoria: i timestamp si derivano dagli
     # ordini (vedi _last_exit_time), questa è solo una cache invalidata dal
     # numero di ordini del trade.
@@ -392,6 +393,39 @@ class RyLoSStrategy(IStrategy):
     def get_total_position_value(self) -> float:
         """Valore totale delle posizioni aperte su tutte le pairs (stake corrente x leva)"""
         return sum(t.stake_amount for t in Trade.get_open_trades()) * 4
+
+
+    def _new_candle_for(self, key, pair: str) -> bool:
+        """True solo alla prima valutazione dopo la chiusura di una candela.
+
+        In backtest i callback sono già chiamati una volta per candela, quindi
+        qui è sempre True: il gate è inerte e la regressione resta bit-perfetta.
+        In live il ciclo gira ogni ~5s (`process_throttle_secs`) e la doc lo dice
+        esplicitamente (`strategy-callbacks.md`: «backtesting can adjust the
+        trade only once per candle, whereas live could adjust the trade multiple
+        times per candle») — è la differenza che avevamo misurato come divergenza
+        live/backtest sul numero di ingressi.
+
+        Quanto pesa, misurato col dettaglio 1m sul range intero: senza gate
+        +509,89% / underwater 30,66% / peggior trade −70,20%; con il gate su
+        entrambi i callback si torna a +22.223,91% / 11,97% / −49,31%, cioè
+        ESATTAMENTE il backtest 5m su cui il candidato è stato validato.
+
+        Non tocca le protezioni: il guard-stop (stop nativo + `custom_stoploss`)
+        e `manage_open_orders` restano valutati a ogni ciclo.
+
+        ⚠️ Se il dataframe smettesse di aggiornarsi, il gate congela DCA e
+        uscite finché non arriva una candela nuova (lo stop resta attivo).
+        È il verso prudente, ed è coperto dal watchdog.
+        """
+        df, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
+        if len(df) == 0:
+            return False
+        last = df["date"].iat[-1]
+        if self._candle_seen.get(key) == last:
+            return False
+        self._candle_seen[key] = last
+        return True
 
     def _entry_fill_info(self, trade: Trade) -> tuple[int, datetime, float] | None:
         """
@@ -586,6 +620,10 @@ class RyLoSStrategy(IStrategy):
     ) -> float | tuple[float, str] | None:
         # Non agire se ci sono ordini aperti
         if trade.has_open_orders:
+            return None
+
+        # Gate: una sola valutazione per candela (vedi _new_candle_for)
+        if not self._new_candle_for(("adj", trade.id), trade.pair):
             return None
 
         fill_info = self._entry_fill_info(trade)
@@ -1064,6 +1102,9 @@ class RyLoSStrategy(IStrategy):
         current_profit: float,
         **kwargs,
     ):
+        if not self._new_candle_for(("exit", trade.id), pair):
+            return None
+
         # ===== Trailing close passivbot (threshold + retracement) =====
         # max_since_open = massimo dall'ultimo cambio di posizione (ultimo fill);
         # exit se ha superato avg_price*(1+threshold) e il prezzo ritraccia
