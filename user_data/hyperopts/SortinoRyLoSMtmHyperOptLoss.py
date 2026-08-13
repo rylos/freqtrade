@@ -85,6 +85,14 @@ def drawdown_mtm(results: DataFrame, candele: DataFrame, starting_balance: float
     La posizione e' una sola alla volta (max_open_trades=1), quindi l'equity e'
     il saldo realizzato piu' il latente della posizione in corso, valutato al
     MINIMO di ogni candela.
+
+    Convenzione di bordo (verificata 2026-08-14 con una seconda implementazione
+    indipendente): la candela in cui avviene un fill viene contata con la
+    posizione POSTERIORE al fill, ma il segmento che termina su un'uscita
+    include la candela dell'uscita stessa con la posizione ancora aperta. E' il
+    caso peggiore — dentro quella candela il minimo puo' essere stato toccato
+    prima che l'ordine venisse eseguito — e vale fino a mezzo punto percentuale
+    (misurato su ep1051: 27,32% contro 26,85% della convenzione ottimista).
     """
     if len(results) == 0 or len(candele) == 0:
         return 0.0
