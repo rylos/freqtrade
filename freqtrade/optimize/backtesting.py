@@ -7,6 +7,7 @@ This module contains the backtesting logic
 from __future__ import annotations
 
 import logging
+import os
 from collections import defaultdict
 from contextlib import nullcontext
 from copy import deepcopy
@@ -471,6 +472,19 @@ class Backtesting:
         :param current_time: Time to get precision for
         :return: tuple of price precision, precision_mode_price for the pair at that given time.
         """
+        # Tick forzato via ambiente (FT_FORCE_TICK), utile quando il tick dedotto
+        # dai dati non e' quello che l'exchange applica davvero: su HYPE i dati
+        # bybit implicano 0.001, mentre bybit oggi impone 0.01, e la differenza
+        # sposta i risultati in modo tutt'altro che trascurabile.
+        # Inerte se la variabile non e' impostata; passa ai processi figli
+        # dell'hyperopt, dove una patch a runtime non arriverebbe.
+        forced = os.environ.get("FT_FORCE_TICK")
+        if forced:
+            if not getattr(self, "_forced_tick_logged", False):
+                logger.warning(f"TICK FORZATO a {forced} da FT_FORCE_TICK")
+                self._forced_tick_logged = True
+            return float(forced), TICK_SIZE
+
         precision_series = self.price_pair_prec.get(pair)
         if precision_series is not None:
             precision = precision_series.asof(current_time)
