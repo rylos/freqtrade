@@ -91,6 +91,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# vero dopo il primo avviso di tick forzato, una volta per processo
+_forced_tick_logged = False
+
 # Indexes for backtest tuples
 DATE_IDX = 0
 OPEN_IDX = 1
@@ -480,9 +483,12 @@ class Backtesting:
         # dell'hyperopt, dove una patch a runtime non arriverebbe.
         forced = os.environ.get("FT_FORCE_TICK")
         if forced:
-            if not getattr(self, "_forced_tick_logged", False):
+            global _forced_tick_logged
+            if not _forced_tick_logged:
+                # una volta per processo: l'hyperopt istanzia Backtesting a ogni
+                # epoch e in ogni worker, quindi un flag di istanza non basta
+                _forced_tick_logged = True
                 logger.warning(f"TICK FORZATO a {forced} da FT_FORCE_TICK")
-                self._forced_tick_logged = True
             return float(forced), TICK_SIZE
 
         precision_series = self.price_pair_prec.get(pair)
