@@ -57,10 +57,13 @@ LINEARITA_SCALE = 10.0
 MTM_LIMITE = 0.29
 MTM_SQUALIFICA_FLAT = 50.0
 MTM_SQUALIFICA_RAMPA = 200.0
-MTM_SCALE = 4.0
+MTM_SCALE = 1.5   # tenuta bassa di proposito: sotto il tetto non si premia
+                  # chi scende meno, altrimenti la ricerca scivola su profili
+                  # troppo calmi che rendono un ottavo (misurato: ep862, 23,6%
+                  # di drawdown reale e +1.499% contro +12.117% del seme)
 # Tempo passato in profondita': non basta il massimo, conta quanto ci si resta
 TEMPO_SOTTO_SOGLIA = 0.10
-TEMPO_SCALE = 8.0
+TEMPO_SCALE = 4.0
 # Recupero e durate (invariati, sono in tempo assoluto)
 RECOVERY_LOG_SCALE = 0.3
 MAX_RECOVERY_DAYS = 15.0
