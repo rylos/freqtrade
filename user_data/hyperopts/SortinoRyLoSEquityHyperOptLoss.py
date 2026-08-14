@@ -17,18 +17,22 @@ Le tre differenze rispetto a SortinoRyLoSAccountHyperOptLoss:
    5m, vedi calibrazione sotto) squalifica secca: "10000 che scendono a 6666 e'
    gia' duro da sostenere psicologicamente".
 
-3. LINEARITA'. L'obiettivo dichiarato e' "una crescita il piu' lineare
-   possibile, non solo in momenti precisi e poi male o piatto". Due termini lo
-   spingono: mdg_w (mediana giornaliera: una equity piatta-poi-salto ha media
-   alta e mediana quasi nulla) col peso alzato, e la bonta' del fit lineare
-   del logaritmo dell'equity nel tempo, che vale 1 per una crescita composta
-   perfettamente regolare e crolla se il guadagno e' concentrato.
+3. CONTRIBUTO DI OGNI PERIODO. L'obiettivo non e' una curva dritta sul totale
+   — il mercato cambia regime, e pretendere una retta penalizzerebbe una
+   strategia che ha semplicemente attraversato regimi diversi — ma che OGNI
+   periodo dia il suo contributo. Quindi mdg_w e' la media delle mediane
+   giornaliere su dieci segmenti DISGIUNTI (peso pieno a ciascuno, mentre le
+   code annidate di passivbot diluiscono i periodi vecchi), col peso doppio
+   rispetto ad adg, piu' un termine sul segmento PEGGIORE perche' una media
+   alta non nasconda un periodo morto.
+   Il fit lineare su log(equity) e' stato provato e rimosso: misurato fra
+   0,898 e 0,913 su candidati profondamente diversi, non discriminava.
 
-Le fette di adg_w/mdg_w sono le stesse di passivbot, verificate sul sorgente
+adg_w resta con le fette di passivbot, verificate sul sorgente
 (`analysis.rs:1093`): dieci code annidate — intero periodo, ultima meta',
-ultimo terzo... fino a un decimo — poi media semplice. Non sono dieci segmenti
-disgiunti: gli ultimi giorni entrano in tutte e dieci le fette, i primi in una
-sola, ed e' cosi' che la misura pesa il recente.
+ultimo terzo... fino a un decimo — poi media semplice. Gli ultimi giorni
+entrano in tutte e dieci le fette e i primi in una sola: e' cosi' che quella
+misura pesa il recente, ed e' giusto che una delle due lo faccia.
 """
 
 import math
@@ -49,13 +53,10 @@ PROFIT_SCALE = 4.0
 # regolarita' della curva. Riferimento sano di passivbot: 0,64
 ADG_REWARD_SCALE = 4.0
 MDG_REWARD_SCALE = 8.0
-N_TRAILING_SLICES = 10
+# il segmento peggiore: impedisce che una media alta nasconda un periodo morto
+MDG_PEGGIORE_SCALE = 4.0
+N_SLICES = 10
 TRADE_FREQUENCY_REWARD_SCALE = 2.0
-# Linearita': R2 del fit lineare su log(equity). Misurato inerte su questo
-# dominio (0,898-0,913 per candidati molto diversi fra loro): su venti mesi di
-# crescita composta tutte le curve sembrano ugualmente log-lineari. Resta come
-# rete di sicurezza contro i casi patologici, ma chi discrimina e' mdg.
-LINEARITA_SCALE = 10.0
 # Drawdown REALE (mark-to-market)
 MTM_LIMITE = 0.29
 MTM_SQUALIFICA_FLAT = 50.0
@@ -177,35 +178,33 @@ class SortinoRyLoSEquityHyperOptLoss(IHyperOptLoss):
         rend = giorni.pct_change().fillna(0.0)
 
         n = len(giorni)
-        adg_slices = []
-        mdg_slices = []
-        for k in range(1, N_TRAILING_SLICES + 1):
-            coda = rend.iloc[n - max(1, n // k) :]
-            adg_slices.append(coda.mean())
-            mdg_slices.append(coda.median())
-        adg_w = sum(adg_slices) / len(adg_slices)
-        mdg_w = sum(mdg_slices) / len(mdg_slices)
+        # adg_w: code annidate alla passivbot — pesa il recente
+        adg_w = sum(rend.iloc[n - max(1, n // k) :].mean() for k in range(1, N_SLICES + 1)) / N_SLICES
+        # mdg_w: SEGMENTI DISGIUNTI, ogni periodo con peso pieno. Il mercato
+        # cambia regime, e quel che si vuole non e' una curva dritta sul totale
+        # ma che OGNI periodo dia il suo contributo: con le code annidate un
+        # periodo debole all'inizio sparisce sotto il peso di quelli recenti.
+        taglio = max(1, n // N_SLICES)
+        mediane = [
+            rend.iloc[i * taglio : (i + 1) * taglio].median()
+            for i in range(N_SLICES)
+            if len(rend.iloc[i * taglio : (i + 1) * taglio]) > 0
+        ]
+        mdg_w = sum(mediane) / len(mediane) if mediane else 0.0
+        mdg_peggiore = min(mediane) if mediane else 0.0
 
         # --- crescita ---
         total_profit_ratio = (finale - starting_balance) / starting_balance
         profit_bonus = math.log1p(max(0.0, total_profit_ratio)) * PROFIT_SCALE
         adg_bonus = math.log1p(max(0.0, adg_w * 365)) * ADG_REWARD_SCALE
         mdg_bonus = math.log1p(max(0.0, mdg_w * 365)) * MDG_REWARD_SCALE
+        # il periodo peggiore conta: un segmento piatto o negativo pesa qui
+        mdg_bonus += math.log1p(max(0.0, mdg_peggiore * 365)) * MDG_PEGGIORE_SCALE
 
         backtest_days = max((max_date - min_date).total_seconds() / 86400, 1.0)
         frequency_reward = (
             math.log1p(trade_count / backtest_days) * TRADE_FREQUENCY_REWARD_SCALE
         )
-
-        # --- linearita': quanto la crescita composta e' regolare nel tempo ---
-        y = np.log(np.maximum(giorni.values, 1e-9))
-        x = np.arange(len(y), dtype="float64")
-        if y.std() > 0:
-            r = float(np.corrcoef(x, y)[0, 1])
-            r2 = r * r
-        else:
-            r2 = 0.0
-        linearita_penalty = (1.0 - r2) * LINEARITA_SCALE
 
         # --- tempo di recupero, sull'equity reale ---
         picco = giorni.cummax()
@@ -252,7 +251,6 @@ class SortinoRyLoSEquityHyperOptLoss(IHyperOptLoss):
             + mdg_bonus
             + frequency_reward
             - mtm_penalty
-            - linearita_penalty
             - recovery_penalty
             - held_penalty
             - duration_penalty
