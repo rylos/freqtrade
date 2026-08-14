@@ -43,15 +43,18 @@ from freqtrade.optimize.hyperopt import IHyperOptLoss
 SORTINO_CAP = 15.0
 SORTINO_WEIGHT = 0.2
 PROFIT_SCALE = 4.0
-# Crescita: mdg pesa quanto adg — e' l'asse anti-scalinata, quello che
-# distingue una curva regolare da una che vive di pochi giorni fortunati
+# Crescita: mdg pesa il DOPPIO di adg. E' l'asse anti-scalinata, e alzato a 4
+# non bastava: nella rifinitura il rapporto mdg/adg scendeva da 0,55 a 0,33
+# mentre l'objective migliorava, cioe' la ricerca comprava rendimento con la
+# regolarita' della curva. Riferimento sano di passivbot: 0,64
 ADG_REWARD_SCALE = 4.0
-MDG_REWARD_SCALE = 4.0
+MDG_REWARD_SCALE = 8.0
 N_TRAILING_SLICES = 10
 TRADE_FREQUENCY_REWARD_SCALE = 2.0
-# Linearita': R2 del fit lineare su log(equity). 1.0 = crescita composta
-# regolare. La penalita' e' (1 - R2) * scala, quindi un R2 di 0.95 costa 0.5
-# punti e uno di 0.80 ne costa 2: un tie-breaker forte ma non dominante.
+# Linearita': R2 del fit lineare su log(equity). Misurato inerte su questo
+# dominio (0,898-0,913 per candidati molto diversi fra loro): su venti mesi di
+# crescita composta tutte le curve sembrano ugualmente log-lineari. Resta come
+# rete di sicurezza contro i casi patologici, ma chi discrimina e' mdg.
 LINEARITA_SCALE = 10.0
 # Drawdown REALE (mark-to-market)
 MTM_LIMITE = 0.29
