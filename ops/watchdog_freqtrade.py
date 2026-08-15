@@ -10,7 +10,7 @@ Esito -> healthchecks.io (check "freqtrade (bybit)"):
 Se il cron o la macchina muoiono, il check scade da solo: e' il dead man switch.
 
 RIAVVIO AUTOMATICO, solo se il processo e' ASSENTE (crash/OOM/kill). Il motivo e'
-che `stoploss_on_exchange` e' disattivo per scelta: il guard-stop -0.721 vive nel
+che `stoploss_on_exchange` e' disattivo per scelta: il guard-stop -0.685 vive nel
 bot, quindi a bot morto una posizione aperta resta senza protezione. Un bot vivo
 ma bloccato NON viene toccato: resta in allarme e decide Marco.
 Freno: al massimo MAX_RESTARTS tentativi in RESTART_WINDOW_MIN minuti, e nessun
