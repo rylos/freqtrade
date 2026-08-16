@@ -6,7 +6,7 @@ sopravvivere a una ricostruzione del server e a versionare le modifiche.
 | file | dove gira | cron |
 |---|---|---|
 | `watchdog_freqtrade.py` | amazon, `~/watchdog/freqtrade_watchdog.py` | `5-59/10 * * * *` |
-| `report_freqtrade.py` | amazon, `~/watchdog/ft_report.py` | `10 9,21 * * *` |
+| `report_freqtrade.py` | amazon, `~/watchdog/ft_report.py` | `7-59/20 * * * *` |
 
 Dopo ogni modifica qui, ricopiare sul server e verificare che l'md5 combaci:
 
@@ -67,24 +67,39 @@ automatica se cron o macchina muoiono (dead man switch).
 
 ## report_freqtrade.py
 
-Report su Telegram due volte al giorno (09:10 e 21:10), **sola lettura**: non
-riavvia, non tocca il bot, non scrive nel db. Nato per le ferie del 15-27 agosto
-2026, gemello di `hl_report.py` (ry-hl su passivbot) da cui prende la struttura.
+Segue i **trade** su Telegram, ogni 20 minuti, in **sola lettura**: non riavvia,
+non tocca il bot, non scrive nel db. Nato per le ferie del 15-27 agosto 2026,
+gemello di `hl_report.py` (ry-hl su passivbot) da cui prende la struttura.
 
-⭐ **Serve perché healthchecks notifica solo sul `/fail`**: senza un segnale
-positivo periodico, il silenzio non è distinguibile da un watchdog morto — e la
-scadenza del dead man switch la si scopre solo aprendo il telefono apposta.
+⭐ **Parla solo se è successo qualcosa** — un evento sui trade o un'anomalia — e
+tace in tutti gli altri giri. La prima versione mandava un verde ogni sei ore:
+inutile, perché il vivo/morto lo copre già healthchecks col dead man switch, e
+un "va tutto bene" periodico insegna solo a non aprire più i messaggi. Il
+confronto è con la situazione dell'ultimo giro, salvata in `ft_report_state.json`.
 
-Riga di stato 🟢/🟠 più: pid e uptime · versione, stato e età dell'heartbeat ·
-**md5 di `.py` e `.json` confrontati con quelli di T6** (un candidato cambiato
-senza deploy vuol dire che il live non è più quello misurato) · trade aperto con
-prezzo corrente da bybit (endpoint pubblico, nessuna chiave) e distanza dal
-guard-stop, oppure da quante ore è flat · trade chiusi e P/L a 24h e in totale ·
-errori veri delle ultime 2h, col rumore noto contato a parte.
+Tre eventi, tutti letti dal db e non dal log:
 
-Diventa 🟠 se: processo assente · heartbeat oltre 10 min · stato ≠ RUNNING · md5
-diversi · non realizzato peggiore di −25% sulla posizione · **flat da oltre 72h**
-(sotto è normale: mediana 4h, p99 41h, massimo storico 71h) · errori veri a 2h.
+- 🟦 **trade aperto** — cambia l'id del trade `is_open = 1`
+- 🟦 **gradino della griglia** — cresce il numero di ordini di ingresso riempiti
+  (`orders`, lato buy, `filled > 0`). È il momento in cui il rischio aumenta,
+  quindi si guardano il nuovo prezzo medio e lo stop ricalcolato
+- 🟩 **trade chiuso** — cresce il conteggio dei chiusi: P/L assoluto e %, durata,
+  `exit_reason`
+
+Il corpo porta sempre anche il contesto: pid e uptime · versione, stato ed età
+dell'heartbeat · **md5 di `.py` e `.json` confrontati con quelli di T6** (un
+candidato cambiato senza deploy vuol dire che il live non è più quello misurato) ·
+posizione col prezzo corrente da bybit (endpoint pubblico, nessuna chiave) e
+distanza dal guard-stop, oppure da quante ore è flat · P/L totale · errori veri
+delle ultime 2h, col rumore noto contato a parte.
+
+Parla comunque, col titolo 🟠, se: processo assente · heartbeat oltre 10 min ·
+stato ≠ RUNNING · md5 diversi · non realizzato peggiore di −25% sulla posizione ·
+**flat da oltre 72h** (sotto è normale: mediana 4h, p99 41h, massimo storico 71h) ·
+errori veri a 2h.
+
+⚠️ Al primo giro dopo un deploy lo stato non esiste: si registra la situazione e
+si tace, altrimenti ogni riavvio dello script produrrebbe un falso evento.
 
 ⚠️ La finestra degli errori è di **2 ore, non 24**: un giallo deve voler dire
 "guarda adesso", non "stanotte il websocket è caduto e il bot si è ripreso da

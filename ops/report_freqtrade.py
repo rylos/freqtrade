@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
 """Report periodico del bot live RyLoS (freqtrade, HYPE/USDT:USDT su bybit).
 
-Complementare al watchdog: quello avvisa quando qualcosa ROMPE (healthchecks.io),
-questo dice periodicamente "sono vivo e sto facendo questo". Nato per le ferie di
-Marco (15-27 agosto 2026), quando nessuno guarda i log e il silenzio di
-healthchecks non e' distinguibile da un watchdog morto senza aprire il telefono.
+Complementare al watchdog: quello avvisa quando il bot ROMPE (healthchecks.io),
+questo segue i TRADE — apertura, gradini della griglia, chiusura — che e' l'unico
+momento in cui c'e' davvero qualcosa da controllare.
 
-Sola lettura: non riavvia, non tocca il bot, non scrive nel db. Cron 2x al giorno.
+⭐ Parla solo se e' successo qualcosa: un evento sui trade oppure un'anomalia.
+Niente messaggi verdi periodici, perche' il vivo/morto lo copre gia' healthchecks
+e un "va tutto bene" ogni sei ore insegna solo a non aprirli piu'. Il confronto e'
+con la situazione dell'ultimo giro, salvata in ft_report_state.json.
+
+Sola lettura: non riavvia, non tocca il bot, non scrive nel db.
 Gemello di hl_report.py (ry-hl su passivbot), da cui prende la struttura.
 """
 
@@ -29,6 +33,9 @@ from pathlib import Path
 
 BASE = Path.home() / "watchdog"
 CREDS = BASE / "telegram.json"
+# Ultima situazione vista: serve a distinguere "e' successo qualcosa" da "e' tutto
+# come al giro prima", che e' l'unica cosa che decide se si parla o si tace.
+STATE = BASE / "ft_report_state.json"
 FT_DIR = Path("/opt/freqtrade")
 DB = FT_DIR / "tradesv3.sqlite"
 TMUX_SESSION = "ft"
@@ -141,6 +148,23 @@ def db_snapshot() -> sqlite3.Connection | None:
         return None
 
 
+def entry_fills(conn: sqlite3.Connection, trade_id: int) -> list:
+    """Gradini della griglia gia' riempiti: sono gli ordini di ingresso eseguiti."""
+    return conn.execute(
+        "select average, filled, order_filled_date from orders "
+        "where ft_trade_id = ? and ft_order_side = 'buy' and filled > 0 "
+        "order by order_filled_date",
+        (trade_id,),
+    ).fetchall()
+
+
+def load_state() -> dict:
+    try:
+        return json.loads(STATE.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
 def utc_ts(s: object) -> float | None:
     try:
         dt = datetime.strptime(str(s)[:19], "%Y-%m-%d %H:%M:%S").replace(tzinfo=UTC)
@@ -152,6 +176,7 @@ def utc_ts(s: object) -> float | None:
 def main() -> None:  # noqa: C901
     rows: list[str] = []
     alert = False
+    prev = load_state()
 
     pid = bot_pid()
     if pid is None:
@@ -194,18 +219,38 @@ def main() -> None:  # noqa: C901
         )
 
     conn = db_snapshot()
+    eventi: list[str] = []
+    firma: dict = {}
     if conn is None:
         alert = True
         rows.append("<b>db non leggibile</b>")
     else:
         price = last_price()
+        n_chiusi, pl_tot = conn.execute(
+            "select count(*), coalesce(sum(close_profit_abs), 0) from trades where is_open = 0"
+        ).fetchone()
         aperti = conn.execute(
             "select id, amount, open_rate, stop_loss, open_date from trades where is_open = 1"
         ).fetchall()
+
         if aperti:
-            _tid, amount, open_rate, stop, open_date = aperti[0]
+            tid, amount, open_rate, stop, open_date = aperti[0]
+            gradini = entry_fills(conn, tid)
+            firma = {"aperto": tid, "gradini": len(gradini), "chiusi": n_chiusi}
             ore = (time.time() - (utc_ts(open_date) or time.time())) / 3600
-            riga = f"aperto da {ore:.0f}h: {amount} @ {open_rate:.3f}"
+
+            if prev.get("aperto") != tid:
+                eventi.append(f"🟦 <b>trade {tid} aperto</b>")
+            elif prev.get("gradini", 0) < len(gradini):
+                # La griglia ha caricato: e' il momento in cui il rischio cresce,
+                # quindi si guarda il nuovo prezzo medio e lo stop ricalcolato.
+                eventi.append(
+                    f"🟦 <b>gradino {len(gradini)}</b> sul trade {tid} "
+                    f"(prima erano {prev.get('gradini', 0)})"
+                )
+
+            riga = f"trade {tid}, aperto da {ore:.0f}h · {len(gradini)} gradini · "
+            riga += f"{amount} @ {open_rate:.3f}"
             if price:
                 unreal = (price - open_rate) * amount
                 pct = (price / open_rate - 1) * 100
@@ -216,31 +261,28 @@ def main() -> None:  # noqa: C901
                     riga += f" · stop {stop:.2f} ({(stop / price - 1) * 100:+.1f}%)"
             rows.append(riga)
         else:
-            ultima = conn.execute(
-                "select max(close_date) from trades where is_open = 0"
-            ).fetchone()[0]
-            t = utc_ts(ultima)
+            firma = {"aperto": None, "gradini": 0, "chiusi": n_chiusi}
+            ultimo = conn.execute(
+                "select id, close_date, close_profit_abs, close_profit, exit_reason, open_date "
+                "from trades where is_open = 0 order by close_date desc limit 1"
+            ).fetchone()
+            if prev.get("chiusi") is not None and prev["chiusi"] < n_chiusi and ultimo:
+                tid, close_date, pl, pl_pct, reason, open_date = ultimo
+                dur = ((utc_ts(close_date) or 0) - (utc_ts(open_date) or 0)) / 3600
+                eventi.append(
+                    f"🟩 <b>trade {tid} chiuso</b>: {pl:+.0f} USDT "
+                    f"({(pl_pct or 0) * 100:+.2f}%) dopo {dur:.0f}h · {esc(str(reason))}"
+                )
+            t = utc_ts(ultimo[1]) if ultimo else None
             flat_h = (time.time() - t) / 3600 if t else None
             if flat_h is not None and flat_h > FLAT_ALERT_H:
                 alert = True
+                eventi.append(f"⏸️ <b>flat da {flat_h:.0f}h</b>, oltre il massimo storico di 71h")
             rows.append(
                 f"flat da {flat_h:.0f}h" if flat_h is not None else "flat, nessun trade nel db"
             )
 
-        cutoff = datetime.now(UTC).timestamp() - 24 * 3600
-        chiusi = [
-            r
-            for r in conn.execute(
-                "select close_date, close_profit_abs, exit_reason from trades where is_open = 0"
-            ).fetchall()
-            if (t := utc_ts(r[0])) is not None and t >= cutoff
-        ]
-        n_tot, pl_tot = conn.execute(
-            "select count(*), coalesce(sum(close_profit_abs), 0) from trades where is_open = 0"
-        ).fetchone()
-        pl_24 = sum(r[1] or 0 for r in chiusi)
-        rows.append(f"24h: {len(chiusi)} chiusi ({pl_24:+.0f} USDT)")
-        rows.append(f"totale: {n_tot} chiusi, {pl_tot:+.0f} USDT")
+        rows.append(f"totale: {n_chiusi} chiusi, {pl_tot:+.0f} USDT")
         conn.close()
 
     # Errori veri delle ultime 2h: telegram e websocket sono rumore noto (README).
@@ -259,8 +301,16 @@ def main() -> None:  # noqa: C901
     if veri:
         rows.append("<code>" + esc(veri[-1][:200]) + "</code>")
 
-    head = "🟠 <b>freqtrade da guardare</b>" if alert else "🟢 <b>freqtrade OK</b>"
-    send("\n".join([head, *rows]))
+    # Silenzio quando non e' successo niente: healthchecks copre gia' il vivo/morto,
+    # e un messaggio verde ogni sei ore insegna solo a non aprirli piu'. Si parla
+    # per un'anomalia o per un evento sui trade, che e' l'unico momento in cui c'e'
+    # davvero qualcosa da controllare.
+    STATE.write_text(json.dumps(firma))
+    if not alert and not eventi:
+        return
+
+    head = "🟠 <b>freqtrade da guardare</b>" if alert else "<b>freqtrade</b>"
+    send("\n".join([head, *eventi, *rows]))
 
 
 if __name__ == "__main__":
