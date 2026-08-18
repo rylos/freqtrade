@@ -95,8 +95,16 @@ delle ultime 2h, col rumore noto contato a parte.
 
 Parla comunque, col titolo 🟠, se: processo assente · heartbeat oltre 10 min ·
 stato ≠ RUNNING · md5 diversi · non realizzato peggiore di −25% sulla posizione ·
-**flat da oltre 72h** (sotto è normale: mediana 4h, p99 41h, massimo storico 71h) ·
 errori veri a 2h.
+
+⚠️ **Un bot fermo non è un allarme**, e l'avviso sul flat prolungato è stato tolto
+il 18/08 dopo che il conto era arrivato a 68h senza trade: mediana 4h, p99 41h,
+massimo storico 71h, ma in un mercato che sale senza storni (HYPE +6% in 72h, con
+un massimo di −1,4% dal picco) una strategia che compra sui ribassi non ha
+semplicemente niente da comprare. Le ore di attesa restano nel corpo del
+messaggio come contesto. Il criterio è quello di sempre: il valore sta nel
+sorvegliare le meccaniche **mentre c'è una posizione**, non nel commentare
+l'assenza di posizioni.
 
 ⚠️ Al primo giro dopo un deploy lo stato non esiste: si registra la situazione e
 si tace, altrimenti ogni riavvio dello script produrrebbe un falso evento.

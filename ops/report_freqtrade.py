@@ -51,8 +51,9 @@ JSON_MD5 = "f1855e93e53cd4236cd115a96c9c138a"
 CAPTURE_LINES = 600
 HEARTBEAT_STALE_MIN = 10
 ERROR_WINDOW_H = 2
-# Sotto le 72h un bot fermo e' normale: mediana 4h, p99 41h, massimo storico 71h.
-FLAT_ALERT_H = 72
+# Un bot fermo NON e' un allarme: mediana 4h, p99 41h, massimo storico 71h, e in
+# mercato che sale senza storni la strategia non ha proprio niente da comprare.
+# Le ore di attesa restano nel corpo del messaggio come contesto, non come giallo.
 # Perdita non realizzata sulla posizione oltre la quale il report diventa giallo.
 # Il vincolo di progetto e' il 30% sul conto: sulla singola posizione si guarda
 # prima, perche' la griglia puo' ancora caricare.
@@ -275,9 +276,6 @@ def main() -> None:  # noqa: C901
                 )
             t = utc_ts(ultimo[1]) if ultimo else None
             flat_h = (time.time() - t) / 3600 if t else None
-            if flat_h is not None and flat_h > FLAT_ALERT_H:
-                alert = True
-                eventi.append(f"⏸️ <b>flat da {flat_h:.0f}h</b>, oltre il massimo storico di 71h")
             rows.append(
                 f"flat da {flat_h:.0f}h" if flat_h is not None else "flat, nessun trade nel db"
             )
