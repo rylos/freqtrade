@@ -85,6 +85,9 @@ BENIGN = (
     "Fatal exception!",
 )
 
+# Stati raggiungibili solo da un comando dell'operatore: non sono guasti.
+DELIBERATE_STATES = ("PAUSED", "STOPPED")
+
 TS_RE = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}),\d+")
 HEARTBEAT_RE = re.compile(r"Bot heartbeat\. PID=(\d+), version='([^']*)', state='([^']*)'")
 LEVEL_RE = re.compile(r" - (ERROR|CRITICAL) - ")
@@ -305,7 +308,15 @@ def main() -> None:  # noqa: C901
             hb_age = line_age_min(line)
             _hb_pid, version, hb_state = m.groups()
             info.append(f"{version}, state={hb_state}")
-            if hb_state != "RUNNING" and not just_restarted:
+            # PAUSED e STOPPED si raggiungono solo con un comando esplicito
+            # (/stopentry, /stop): sono fermate volute, non guasti. Segnalarle
+            # come anomalia faceva suonare healthchecks per una scelta di Marco
+            # — successo il 21/08/2026 dopo uno /stopentry. Restano ben visibili
+            # nel titolo del ping, perche' un bot in pausa dimenticato tale e'
+            # comunque una cosa da sapere.
+            if hb_state in DELIBERATE_STATES:
+                info.append(f"bot in {hb_state}: fermata voluta, nessun ingresso nuovo")
+            elif hb_state != "RUNNING" and not just_restarted:
                 problems.append(f"stato del bot = {hb_state} (atteso RUNNING)")
             if hb_age is not None and hb_age > HEARTBEAT_STALE_MIN and not just_restarted:
                 problems.append(
@@ -362,7 +373,10 @@ def main() -> None:  # noqa: C901
         info.append(trades_desc)
 
     ok = not problems
-    head = f"freqtrade RyLoS {candidato_attivo()} (amazon) — " + ("OK" if ok else "ANOMALIA")
+    stato = next((i.split(":")[0] for i in info if i.startswith("bot in ")), None)
+    head = f"freqtrade RyLoS {candidato_attivo()} (amazon) — " + (
+        (stato.replace("bot in ", "OK, ") if stato else "OK") if ok else "ANOMALIA"
+    )
     body = "\n".join([head, *(f"[!] {p}" for p in problems), *(f"- {i}" for i in info)])
 
     ping(ok, body)

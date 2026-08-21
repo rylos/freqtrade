@@ -54,6 +54,7 @@ ERROR_WINDOW_H = 2
 # Un bot fermo NON e' un allarme: mediana 4h, p99 41h, massimo storico 71h, e in
 # mercato che sale senza storni la strategia non ha proprio niente da comprare.
 # Le ore di attesa restano nel corpo del messaggio come contesto, non come giallo.
+
 # Perdita non realizzata sulla posizione oltre la quale il report diventa giallo.
 # Il vincolo di progetto e' il 30% sul conto: sulla singola posizione si guarda
 # prima, perche' la griglia puo' ancora caricare.
@@ -194,7 +195,9 @@ def main() -> None:  # noqa: C901
         if m:
             hb_age = line_age_min(line)
             _p, version, state = m.groups()
-            if state != "RUNNING":
+            # PAUSED e STOPPED arrivano solo da un comando esplicito: sono
+            # fermate volute, non guasti. Vedi ops/watchdog_freqtrade.py.
+            if state not in ("RUNNING", "PAUSED", "STOPPED"):
                 alert = True
             rows.append(
                 f"{version}, state={state}"
