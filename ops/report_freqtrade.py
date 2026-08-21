@@ -42,10 +42,10 @@ TMUX_SESSION = "ft"
 PAIR = "HYPE/USDT:USDT"
 TICKER_URL = "https://api.bybit.com/v5/market/tickers?category=linear&symbol=HYPEUSDT"
 
-# Gli md5 del candidato in produzione (T6, dal 2026-08-14). Se cambiano senza che
+# Gli md5 del candidato in produzione (T7, dal 2026-08-21). Se cambiano senza che
 # sia stato fatto un deploy, il live non e' piu' quello misurato nel backtest.
-PY_MD5 = "6fb7a27167b4d43721c4fa731944ace8"
-JSON_MD5 = "f1855e93e53cd4236cd115a96c9c138a"
+PY_MD5 = "91efaffe0cb877fe553b610fb3e3f507"
+JSON_MD5 = "9591db30c1f65d484f5449765fde38f7"
 
 # Stesse finestre e stessi filtri di rumore del watchdog: vedi ops/README.md.
 CAPTURE_LINES = 600
@@ -214,7 +214,7 @@ def main() -> None:  # noqa: C901
     py_ok = md5(FT_DIR / "user_data/strategies/RyLoSStrategy.py") == PY_MD5
     json_ok = md5(FT_DIR / "user_data/strategies/RyLoSStrategy.json") == JSON_MD5
     if py_ok and json_ok:
-        rows.append("candidato T6 (md5 .py e .json ok)")
+        rows.append("candidato T7 (md5 .py e .json ok)")
     else:
         alert = True
         rows.append(
