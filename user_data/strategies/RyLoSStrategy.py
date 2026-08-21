@@ -66,12 +66,19 @@ class RyLoSStrategy(IStrategy):
     total_wallet_exposure_limit = DecimalParameter(
         1.0, 3.0, default=1.873, space="buy", optimize=True
     )
-    first_order_pct = DecimalParameter(0.02, 0.09, default=0.066, space="buy", optimize=True)
+    # ⚠️ Fondo a 0.004 dal 2026-08-21. Lo stake di ogni gradino e'
+    # first_order_pct * dca_multiplier**i, quindi questi due parametri insieme
+    # decidono QUANTI gradini entrano nel budget TWE — non solo quanto pesano.
+    # Con 0.066 e 2.037 il budget si esaurisce al terzo gradino; passivbot su
+    # HYPE usa initial_qty 0.00812 e double-down 1.32 e ne riempie fino a 12,
+    # con lo stesso drawdown (28.0% contro 28.7%) e adg doppio. La geometria
+    # "primo ordine piccolo, tanti gradini leggeri" era esclusa dai range.
+    first_order_pct = DecimalParameter(0.004, 0.09, default=0.066, space="buy", optimize=True)
     # Tetto alzato a 0.045 il 2026-08-21: col motore corretto l'ottimizzatore
     # spinge la griglia molto piu' larga (0.024 contro lo 0.008 di T6) e restava
     # appiccicato al bordo precedente, sintomo di range troppo stretto.
     dca_distance = DecimalParameter(0.006, 0.045, default=0.024, space="buy", optimize=True)
-    dca_multiplier = DecimalParameter(1.5, 3.0, default=2.037, space="buy", optimize=True)
+    dca_multiplier = DecimalParameter(1.05, 3.0, default=2.037, space="buy", optimize=True)
 
     # DCA dinamico basato su volatilità ATR
     dca_atr_multiplier = DecimalParameter(1.0, 2.5, default=1.934, space="buy", optimize=True)
