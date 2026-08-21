@@ -67,7 +67,10 @@ class RyLoSStrategy(IStrategy):
         1.0, 3.0, default=2.809, space="buy", optimize=True
     )
     first_order_pct = DecimalParameter(0.02, 0.09, default=0.075, space="buy", optimize=True)
-    dca_distance = DecimalParameter(0.006, 0.025, default=0.008, space="buy", optimize=True)
+    # Tetto alzato a 0.045 il 2026-08-21: col motore corretto l'ottimizzatore
+    # spinge la griglia molto piu' larga (0.024 contro lo 0.008 di T6) e restava
+    # appiccicato al bordo precedente, sintomo di range troppo stretto.
+    dca_distance = DecimalParameter(0.006, 0.045, default=0.008, space="buy", optimize=True)
     dca_multiplier = DecimalParameter(1.5, 3.0, default=2.363, space="buy", optimize=True)
 
     # DCA dinamico basato su volatilità ATR
@@ -80,7 +83,7 @@ class RyLoSStrategy(IStrategy):
     # Trailing entry per DCA (passivbot entry trailing_retracement_pct):
     # dopo la discesa serve un rimbalzo confermato dal minimo prima di comprare
     dca_trailing_retracement_pct = DecimalParameter(
-        0.003, 0.008, default=0.005, space="buy", optimize=True
+        0.001, 0.008, default=0.005, space="buy", optimize=True
     )
 
     # ===== Modulazione dello stake DCA con la pressione di volume (TMF) =====
@@ -171,10 +174,10 @@ class RyLoSStrategy(IStrategy):
     # exit quando il massimo dall'ultimo fill supera avg_price*(1+threshold)
     # e il prezzo ritraccia di retracement dal massimo
     close_trailing_threshold_pct = DecimalParameter(
-        0.008, 0.020, default=0.014, space="sell", optimize=True
+        0.008, 0.030, default=0.014, space="sell", optimize=True
     )
     close_trailing_retracement_pct = DecimalParameter(
-        0.002, 0.007, default=0.002, space="sell", optimize=True
+        0.0005, 0.007, default=0.002, space="sell", optimize=True
     )
 
     # Close grid passivbot (dd39: markup_start 0.617% / end 0.261%,
