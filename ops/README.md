@@ -112,3 +112,33 @@ si tace, altrimenti ogni riavvio dello script produrrebbe un falso evento.
 ⚠️ La finestra degli errori è di **2 ore, non 24**: un giallo deve voler dire
 "guarda adesso", non "stanotte il websocket è caduto e il bot si è ripreso da
 solo". Stessa lezione di `hl_report.py`.
+
+## analisi/ — strumenti di validazione
+
+Girano su debian, in `user_data/val/`. Ognuno esiste perché una misura sbagliata
+ci era già costata una conclusione sbagliata.
+
+| file | risponde a |
+|---|---|
+| `mtm2.py` | qual è il drawdown **reale** (mark-to-market) di un backtest |
+| `esposizione.py` | il candidato è **robusto o solo timido**? |
+| `confronta.py` | i due bracci di un A/B sono **davvero diversi**? |
+
+⚠️ `mtm2.py` riusa `serie_mtm` **dalla loss** invece di riscrivere il calcolo: una
+versione veloce scritta a parte ignorava le uscite parziali e sovrastimava il
+drawdown di due punti. Se la misura di validazione e quella che guida
+l'ottimizzazione divergono, non si sta validando niente.
+
+⭐ `esposizione.py` esiste perché **la timidezza è gratis**: qualunque strategia
+ottiene meno drawdown riducendo la size, quindi un confronto a rischio diverso
+non distingue "migliore" da "più prudente". Il rapporto adg / esposizione media
+lo distingue. Riporta anche perdite realizzate e loss/profit ratio, perché un
+candidato può migliorare il periodo peggiore **evitando di realizzare** invece
+che evitando di perdere — sintomo: le perdite realizzate crollano e la durata
+massima esplode.
+
+⛔ `confronta.py` verifica il **comportamento** (trade, fill, durate, uscite)
+prima di guardare il rendimento, e si rifiuta di proseguire se i due bracci sono
+identici. Un A/B fra una configurazione e sé stessa restituisce sempre "nessuna
+differenza", ed è indistinguibile da un risultato negativo genuino: è successo il
+2026-08-22 con un parametro sopra la sua soglia di attivazione.
