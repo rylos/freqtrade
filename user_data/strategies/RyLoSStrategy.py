@@ -194,8 +194,16 @@ class RyLoSStrategy(IStrategy):
     close_grid_enabled = CategoricalParameter(
         [True, False], default=True, space="sell", optimize=True
     )
+    # ⚠️ Fondo alzato a 0.015 il 2026-08-22. Con markup basso la griglia di
+    # chiusura diventa uno scalper che vende dentro il trend: nel fuori campione
+    # del rialzo 2026 un candidato con markup 0.009 faceva 180 uscite tp_grid su
+    # 260 e rendeva +16.6%, mentre spegnendola faceva +37.1% con drawdown MINORE
+    # (21.1% contro 24.3%) e Sortino doppio. Misurato anche che il prezzo, dopo
+    # ogni uscita, saliva ancora del +1.68% entro 6h e +6.70% entro 72h (mediane
+    # su 260 trade): stavamo scalpando un mercato in salita.
+    # Sopra il 3% il meccanismo non scatta mai, quindi il range utile e' stretto.
     close_grid_markup_pct = DecimalParameter(
-        0.002, 0.030, default=0.017, space="sell", optimize=True
+        0.015, 0.030, default=0.017, space="sell", optimize=True
     )
     close_grid_qty_pct = DecimalParameter(0.10, 0.60, default=0.489, space="sell", optimize=True)
     # Dopo questo numero di clip, il trigger successivo chiude tutto:
