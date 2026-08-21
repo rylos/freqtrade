@@ -194,16 +194,18 @@ class RyLoSStrategy(IStrategy):
     close_grid_enabled = CategoricalParameter(
         [True, False], default=True, space="sell", optimize=True
     )
-    # ⚠️ Fondo alzato a 0.015 il 2026-08-22. Con markup basso la griglia di
-    # chiusura diventa uno scalper che vende dentro il trend: nel fuori campione
-    # del rialzo 2026 un candidato con markup 0.009 faceva 180 uscite tp_grid su
-    # 260 e rendeva +16.6%, mentre spegnendola faceva +37.1% con drawdown MINORE
-    # (21.1% contro 24.3%) e Sortino doppio. Misurato anche che il prezzo, dopo
-    # ogni uscita, saliva ancora del +1.68% entro 6h e +6.70% entro 72h (mediane
-    # su 260 trade): stavamo scalpando un mercato in salita.
-    # Sopra il 3% il meccanismo non scatta mai, quindi il range utile e' stretto.
+    # ⚠️ NON alzare il fondo di questo range. Tentato il 2026-08-22 e ANNULLATO
+    # lo stesso giorno: nel fuori campione del rialzo 2026 spegnere la griglia
+    # di chiusura sembrava un miglioramento netto (+16.6% -> +37.1%, drawdown
+    # 24.3% -> 21.1%), ma misurato anche sul RIBASSO il verso si rovescia —
+    # accesa +50.4% con drawdown 15.8%, spenta +9.5% con drawdown 33.0%. Sul
+    # periodo intero spegnerla rende di piu' (+3315% contro +2191%) ma porta il
+    # drawdown dal 24.3% al 33.0%, cioe' oltre il limite di progetto del 30%.
+    # Non e' un meccanismo tarato male: scambia rendimento con varianza, ed e'
+    # il baratto che vogliamo. Lezione di metodo: misurare un meccanismo su un
+    # solo regime dice quanto costa, non a cosa serve.
     close_grid_markup_pct = DecimalParameter(
-        0.015, 0.030, default=0.017, space="sell", optimize=True
+        0.002, 0.030, default=0.017, space="sell", optimize=True
     )
     close_grid_qty_pct = DecimalParameter(0.10, 0.60, default=0.489, space="sell", optimize=True)
     # Dopo questo numero di clip, il trigger successivo chiude tutto:
