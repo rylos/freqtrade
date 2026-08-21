@@ -60,12 +60,15 @@ class RyLoSStrategy(IStrategy):
     # Total wallet exposure limit (passivbot risk.total_wallet_exposure_limit,
     # bounds dd39 [2.5, 3]): il rischio massimo è balance * TWE,
     # disaccoppiato dalla leva exchange (4x, che determina solo il margine)
+    # ⚠️ Fondo riaperto a 1.0 il 2026-08-21: il 2.5 veniva da conclusioni tratte
+    # sul motore col bug di _window_extremes, dove il rischio della griglia era
+    # sottostimato. Col motore corretto l'esposizione deve poter scendere.
     total_wallet_exposure_limit = DecimalParameter(
-        2.5, 3.0, default=2.809, space="buy", optimize=True
+        1.0, 3.0, default=2.809, space="buy", optimize=True
     )
-    first_order_pct = DecimalParameter(0.04, 0.09, default=0.075, space="buy", optimize=True)
-    dca_distance = DecimalParameter(0.006, 0.014, default=0.008, space="buy", optimize=True)
-    dca_multiplier = DecimalParameter(2.2, 3.0, default=2.363, space="buy", optimize=True)
+    first_order_pct = DecimalParameter(0.02, 0.09, default=0.075, space="buy", optimize=True)
+    dca_distance = DecimalParameter(0.006, 0.025, default=0.008, space="buy", optimize=True)
+    dca_multiplier = DecimalParameter(1.5, 3.0, default=2.363, space="buy", optimize=True)
 
     # DCA dinamico basato su volatilità ATR
     dca_atr_multiplier = DecimalParameter(1.0, 2.5, default=1.067, space="buy", optimize=True)
@@ -486,6 +489,18 @@ class RyLoSStrategy(IStrategy):
         usa una cache incrementale per candela (O(1) ammortizzato) — i valori
         dipendono solo dalle candele, non dai parametri, quindi la cache è
         sempre valida per lo stesso anchor.
+
+        ⚠️ La cache va ancorata alla DATA dell'ultima candela vista, mai alla sua
+        posizione. In backtest `dp.get_analyzed_dataframe` non restituisce il
+        dataframe intero ma `df.iloc[max_index - MAX_DATAFRAME_CANDLES:max_index]`,
+        cioè una finestra mobile delle ultime 1000 candele (`dataprovider.py`):
+        gli indici scorrono di uno a ogni candela, quindi un `end_idx` salvato al
+        giro prima indica una candela diversa. Con la cache a indici la condizione
+        di riscansione non era mai vera e **il massimo restava congelato al primo
+        valore** — misurato il 20/08/2026: 72.22 invece di 72.69, con il trailing
+        di uscita che non scattava piu'. Colpiva anche il trailing entry del DCA.
+        Correzione validata identica alla versione senza cache, sia sulla finestra
+        live sia sul periodo intero.
         """
         dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
         if dataframe.empty:
@@ -503,17 +518,19 @@ class RyLoSStrategy(IStrategy):
 
         key = (pair, anchor_time)
         cached = self._extremes_cache.get(key)
-        if cached is not None and start_idx < cached[0] <= end_idx:
-            scan_from, high_max, low_min = cached
-        else:
-            scan_from, high_max, low_min = start_idx, float("-inf"), float("inf")
+        scan_from, high_max, low_min = start_idx, float("-inf"), float("inf")
+        if cached is not None:
+            cached_date, c_high, c_low = cached
+            resume = int(dates.searchsorted(Timestamp(cached_date).as_unit(unit), side="right"))
+            if start_idx <= resume <= end_idx:
+                scan_from, high_max, low_min = resume, c_high, c_low
 
         if end_idx > scan_from:
             segment = dataframe.iloc[scan_from:end_idx]
             high_max = max(high_max, segment["high"].max())
             low_min = min(low_min, segment["low"].min())
 
-        self._extremes_cache[key] = (end_idx, high_max, low_min)
+        self._extremes_cache[key] = (dates.iat[end_idx - 1], high_max, low_min)
         return high_max, low_min
 
     def custom_stake_amount(

@@ -1,0 +1,67 @@
+{
+  "strategy_name": "RyLoSStrategy",
+  "params": {
+    "roi": {},
+    "trailing": {
+      "trailing_stop": false,
+      "trailing_stop_positive": null,
+      "trailing_stop_positive_offset": 0.0,
+      "trailing_only_offset_is_reached": false
+    },
+    "max_open_trades": {
+      "max_open_trades": 1
+    },
+    "sell": {
+      "harvest_enabled": false,
+      "harvest_markup_pct": 0.02,
+      "harvest_qty_pct": 0.15,
+      "stoploss_anchor": "first_entry",
+      "close_grid_enabled": true,
+      "close_grid_markup_pct": 0.029,
+      "close_grid_qty_pct": 0.286,
+      "close_trailing_retracement_pct": 0.002,
+      "close_trailing_threshold_pct": 0.014,
+      "exit_stoch_ob": 75.457,
+      "min_profit_for_overbought_exit": 0.034,
+      "osc_exit_threshold": 28.378,
+      "profit_lock_enabled": true,
+      "profit_lock_qty_pct": 0.99,
+      "profit_lock_threshold": 0.158,
+      "time_exit_days": 3,
+      "time_exit_enabled": false,
+      "time_exit_qty_pct": 0.99,
+      "unstuck_age_scaling": 0.574,
+      "unstuck_close_pct": 0.041,
+      "unstuck_ema_dist": -0.002,
+      "unstuck_loss_allowance_pct": 0.009,
+      "unstuck_max_held_days": 12,
+      "unstuck_release_ratio": 0.997,
+      "unstuck_threshold": 0.896
+    },
+    "buy": {
+      "crash_guard_pct": 8.0,
+      "dca_cooldown_candles": 2,
+      "ema_span_candles": 68,
+      "dca_atr_multiplier": 1.067,
+      "dca_distance": 0.008,
+      "dca_multiplier": 2.363,
+      "dca_tmf_weight": 0.843,
+      "dca_trailing_retracement_pct": 0.005,
+      "dca_we_weight": 0.591,
+      "emergency_critical_multiplier": 1.399,
+      "emergency_dca_threshold": -0.061,
+      "entry_stoch_os": 40.326,
+      "first_order_pct": 0.075,
+      "initial_ema_dist": -0.01,
+      "osc_entry_threshold": -11.914,
+      "reentry_enabled": true,
+      "reentry_exposure": 0.872,
+      "total_wallet_exposure_limit": 2.809
+    },
+    "stoploss": {
+      "stoploss": -0.685
+    }
+  },
+  "ft_stratparam_v": 1,
+  "export_time": "2026-08-14 19:47:15.456478+00:00"
+}
