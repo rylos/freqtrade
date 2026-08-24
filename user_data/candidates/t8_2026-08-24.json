@@ -1,0 +1,47 @@
+{
+  "strategy_name": "RyLoSStrategy",
+  "params": {
+    "buy": {
+      "dca_atr_multiplier": 1.478,
+      "dca_distance": 0.028,
+      "dca_multiplier": 1.324,
+      "dca_tmf_weight": 0.826,
+      "dca_trailing_retracement_pct": 0.002,
+      "dca_we_weight": 0.559,
+      "emergency_critical_multiplier": 1.512,
+      "emergency_dca_threshold": -0.06,
+      "entry_stoch_os": 34.555,
+      "first_order_pct": 0.088,
+      "initial_ema_dist": -0.009,
+      "osc_entry_threshold": -12.301,
+      "reentry_enabled": false,
+      "reentry_exposure": 0.712,
+      "total_wallet_exposure_limit": 1.128
+    },
+    "sell": {
+      "close_grid_enabled": false,
+      "close_grid_markup_pct": 0.028,
+      "close_grid_qty_pct": 0.509,
+      "close_trailing_retracement_pct": 0.002,
+      "close_trailing_threshold_pct": 0.026,
+      "exit_stoch_ob": 69.816,
+      "min_profit_for_overbought_exit": 0.024,
+      "osc_exit_threshold": 28.428,
+      "profit_lock_enabled": true,
+      "profit_lock_qty_pct": 0.92,
+      "profit_lock_threshold": 0.181,
+      "time_exit_days": 3,
+      "time_exit_enabled": true,
+      "time_exit_qty_pct": 0.511,
+      "unstuck_age_scaling": 0.652,
+      "unstuck_close_pct": 0.047,
+      "unstuck_ema_dist": -0.014,
+      "unstuck_loss_allowance_pct": 0.007,
+      "unstuck_max_held_days": 11,
+      "unstuck_release_ratio": 0.989,
+      "unstuck_threshold": 0.969
+    }
+  },
+  "ft_stratparam_v": 1,
+  "export_time": ""
+}
