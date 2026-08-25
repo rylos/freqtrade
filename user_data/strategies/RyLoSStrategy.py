@@ -81,11 +81,20 @@ class RyLoSStrategy(IStrategy):
     dca_multiplier = DecimalParameter(1.05, 3.0, default=2.037, space="buy", optimize=True)
 
     # DCA dinamico basato su volatilità ATR
-    dca_atr_multiplier = DecimalParameter(1.0, 2.5, default=1.934, space="buy", optimize=True)
+    # ⚠️ Tetto alzato a 15.0 il 2026-08-25: passivbot usa
+    # grid_spacing_volatility_weight 13.624 su una misura di volatilita' dello
+    # stesso ordine di grandezza del nostro atr_pct. Il 2.5 precedente era un
+    # limite nostro, non una conclusione misurata.
+    dca_atr_multiplier = DecimalParameter(0.0, 15.0, default=1.934, space="buy", optimize=True)
 
     # DCA dinamico basato su esposizione (passivbot grid_spacing_we_weight):
     # più la posizione è carica, più le distanze si allargano
-    dca_we_weight = DecimalParameter(0.0, 0.6, default=0.403, space="buy", optimize=True)
+    # ⚠️ Tetto da 0.6 a 8.0. E' il FRENO PROGRESSIVO: piu' la posizione e' carica,
+    # piu' il mercato deve muoversi per farci comprare ancora. Con 0.6 la
+    # distanza fra i gradini cresce al massimo di 1.4 volte a piena esposizione;
+    # passivbot usa 6.541 e la fa crescere di 7.6 volte, ed e' probabilmente
+    # cosi' che rende sicuri i gradini profondi (loro ne riempiono fino a 12).
+    dca_we_weight = DecimalParameter(0.0, 8.0, default=0.403, space="buy", optimize=True)
 
     # Trailing entry per DCA (passivbot entry trailing_retracement_pct):
     # dopo la discesa serve un rimbalzo confermato dal minimo prima di comprare
