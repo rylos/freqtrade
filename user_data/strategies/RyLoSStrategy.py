@@ -64,7 +64,7 @@ class RyLoSStrategy(IStrategy):
     # sul motore col bug di _window_extremes, dove il rischio della griglia era
     # sottostimato. Col motore corretto l'esposizione deve poter scendere.
     total_wallet_exposure_limit = DecimalParameter(
-        1.0, 3.0, default=1.873, space="buy", optimize=True
+        1.0, 3.0, default=2.189, space="buy", optimize=True
     )
     # ⚠️ Fondo a 0.004 dal 2026-08-21. Lo stake di ogni gradino e'
     # first_order_pct * dca_multiplier**i, quindi questi due parametri insieme
@@ -73,19 +73,19 @@ class RyLoSStrategy(IStrategy):
     # HYPE usa initial_qty 0.00812 e double-down 1.32 e ne riempie fino a 12,
     # con lo stesso drawdown (28.0% contro 28.7%) e adg doppio. La geometria
     # "primo ordine piccolo, tanti gradini leggeri" era esclusa dai range.
-    first_order_pct = DecimalParameter(0.004, 0.09, default=0.066, space="buy", optimize=True)
+    first_order_pct = DecimalParameter(0.004, 0.09, default=0.069, space="buy", optimize=True)
     # Tetto alzato a 0.045 il 2026-08-21: col motore corretto l'ottimizzatore
     # spinge la griglia molto piu' larga (0.024 contro lo 0.008 di T6) e restava
     # appiccicato al bordo precedente, sintomo di range troppo stretto.
-    dca_distance = DecimalParameter(0.006, 0.045, default=0.024, space="buy", optimize=True)
-    dca_multiplier = DecimalParameter(1.05, 3.0, default=2.037, space="buy", optimize=True)
+    dca_distance = DecimalParameter(0.006, 0.045, default=0.023, space="buy", optimize=True)
+    dca_multiplier = DecimalParameter(1.05, 3.0, default=1.365, space="buy", optimize=True)
 
     # DCA dinamico basato su volatilità ATR
     # ⚠️ Tetto alzato a 15.0 il 2026-08-25: passivbot usa
     # grid_spacing_volatility_weight 13.624 su una misura di volatilita' dello
     # stesso ordine di grandezza del nostro atr_pct. Il 2.5 precedente era un
     # limite nostro, non una conclusione misurata.
-    dca_atr_multiplier = DecimalParameter(0.0, 15.0, default=1.934, space="buy", optimize=True)
+    dca_atr_multiplier = DecimalParameter(0.0, 15.0, default=3.353, space="buy", optimize=True)
 
     # DCA dinamico basato su esposizione (passivbot grid_spacing_we_weight):
     # più la posizione è carica, più le distanze si allargano
@@ -94,7 +94,7 @@ class RyLoSStrategy(IStrategy):
     # distanza fra i gradini cresce al massimo di 1.4 volte a piena esposizione;
     # passivbot usa 6.541 e la fa crescere di 7.6 volte, ed e' probabilmente
     # cosi' che rende sicuri i gradini profondi (loro ne riempiono fino a 12).
-    dca_we_weight = DecimalParameter(0.0, 8.0, default=0.403, space="buy", optimize=True)
+    dca_we_weight = DecimalParameter(0.0, 8.0, default=5.537, space="buy", optimize=True)
 
     # Trailing entry per DCA (passivbot entry trailing_retracement_pct):
     # dopo la discesa serve un rimbalzo confermato dal minimo prima di comprare
@@ -124,7 +124,7 @@ class RyLoSStrategy(IStrategy):
     # parametri strutturali (ref, finestra, periodo): mai sotto la baseline.
     # Attesa onesta al netto del bias di selezione: +4-5%, dd e uw invariati.
     # Peso 0 = comportamento T4G invariato.
-    dca_tmf_weight = DecimalParameter(0.0, 1.0, default=0.976, space="buy", optimize=True)
+    dca_tmf_weight = DecimalParameter(0.0, 1.0, default=0.889, space="buy", optimize=True)
 
     # ===== IDEA 3 — unstuck bidirezionale (ri-entrata sullo spazio liberato) =====
     # Ogni clip di unstuck libera capacità sotto il TWE, ma oggi resta
@@ -137,7 +137,7 @@ class RyLoSStrategy(IStrategy):
     reentry_enabled = CategoricalParameter(
         [True, False], default=False, space="buy", optimize=True
     )
-    reentry_exposure = DecimalParameter(0.30, 0.90, default=0.869, space="buy", optimize=True)
+    reentry_exposure = DecimalParameter(0.30, 0.90, default=0.697, space="buy", optimize=True)
 
     # ===== CRASH GUARD: niente primo ingresso dentro una caduta verticale =====
     # Idea di Marco. NON è un filtro predittivo: all'ingresso gli stop sono
@@ -159,7 +159,7 @@ class RyLoSStrategy(IStrategy):
 
     # Ancoraggio EMA per il primo ordine (passivbot initial_ema_dist):
     # entra solo se il prezzo è sotto EMA * (1 + dist), dist negativa
-    initial_ema_dist = DecimalParameter(-0.016, -0.006, default=-0.01, space="buy", optimize=True)
+    initial_ema_dist = DecimalParameter(-0.016, -0.006, default=-0.009, space="buy", optimize=True)
     # Span EMA in candele 5m (~340 min, passivbot ema_span 320/360)
     ema_span_candles = IntParameter(40, 100, default=68, space="buy", optimize=False)
 
@@ -168,32 +168,32 @@ class RyLoSStrategy(IStrategy):
 
     # Entry: oscillatore 4RSI di RyLoS (istogramma continuo hyperoptabile
     # al posto del conteggio discreto: avg(RSI2, RSI7, RSI14) - 50)
-    osc_entry_threshold = DecimalParameter(-16, -8, default=-11.197, space="buy", optimize=True)
-    entry_stoch_os = DecimalParameter(28, 44, default=42.74, space="buy", optimize=True)
+    osc_entry_threshold = DecimalParameter(-16, -8, default=-12.505, space="buy", optimize=True)
+    entry_stoch_os = DecimalParameter(28, 44, default=37.369, space="buy", optimize=True)
 
     # Emergency DCA (prima della liquidazione)
     emergency_dca_threshold = DecimalParameter(
-        -0.10, -0.05, default=-0.081, space="buy", optimize=True
+        -0.10, -0.05, default=-0.082, space="buy", optimize=True
     )
     emergency_critical_multiplier = DecimalParameter(
-        1.1, 1.6, default=1.336, space="buy", optimize=True
+        1.1, 1.6, default=1.424, space="buy", optimize=True
     )
 
     # Exit: oscillatore 4RSI lato overbought (continuo)
-    osc_exit_threshold = DecimalParameter(18, 32, default=21.755, space="sell", optimize=True)
-    exit_stoch_ob = DecimalParameter(65, 82, default=70.488, space="sell", optimize=True)
+    osc_exit_threshold = DecimalParameter(18, 32, default=18.049, space="sell", optimize=True)
+    exit_stoch_ob = DecimalParameter(65, 82, default=78.3, space="sell", optimize=True)
     min_profit_for_overbought_exit = DecimalParameter(
-        0.02, 0.07, default=0.063, space="sell", optimize=True
+        0.02, 0.07, default=0.059, space="sell", optimize=True
     )
 
     # Trailing close passivbot (close trailing_threshold/retracement, config dd39):
     # exit quando il massimo dall'ultimo fill supera avg_price*(1+threshold)
     # e il prezzo ritraccia di retracement dal massimo
     close_trailing_threshold_pct = DecimalParameter(
-        0.008, 0.030, default=0.018, space="sell", optimize=True
+        0.008, 0.030, default=0.02, space="sell", optimize=True
     )
     close_trailing_retracement_pct = DecimalParameter(
-        0.0005, 0.007, default=0.002, space="sell", optimize=True
+        0.0005, 0.007, default=0.007, space="sell", optimize=True
     )
 
     # Close grid passivbot (dd39: markup_start 0.617% / end 0.261%,
@@ -214,9 +214,9 @@ class RyLoSStrategy(IStrategy):
     # il baratto che vogliamo. Lezione di metodo: misurare un meccanismo su un
     # solo regime dice quanto costa, non a cosa serve.
     close_grid_markup_pct = DecimalParameter(
-        0.002, 0.030, default=0.017, space="sell", optimize=True
+        0.002, 0.030, default=0.021, space="sell", optimize=True
     )
-    close_grid_qty_pct = DecimalParameter(0.10, 0.60, default=0.489, space="sell", optimize=True)
+    close_grid_qty_pct = DecimalParameter(0.10, 0.60, default=0.595, space="sell", optimize=True)
     # Dopo questo numero di clip, il trigger successivo chiude tutto:
     # evita il "moncherino" che resta aperto per settimane
     CLOSE_GRID_MAX_CLIPS = 2
@@ -227,10 +227,10 @@ class RyLoSStrategy(IStrategy):
     # candele) non fa in tempo a scalare la posizione prima del ritraccio.
     # Default OFF: i candidati del run 2026-07-21 restano identici.
     profit_lock_enabled = CategoricalParameter(
-        [True, False], default=False, space="sell", optimize=True
+        [True, False], default=True, space="sell", optimize=True
     )
-    profit_lock_threshold = DecimalParameter(0.10, 0.22, default=0.201, space="sell", optimize=True)
-    profit_lock_qty_pct = DecimalParameter(0.8, 1.0, default=0.833, space="sell", optimize=True)
+    profit_lock_threshold = DecimalParameter(0.10, 0.22, default=0.11, space="sell", optimize=True)
+    profit_lock_qty_pct = DecimalParameter(0.8, 1.0, default=0.98, space="sell", optimize=True)
 
     # Unstuck passivbot: riduzione parziale della posizione stuck.
     # ⚠️ Range esteso a 1.00 il 2026-08-10 (era 0.55-0.80): il massimo cadeva
@@ -242,11 +242,11 @@ class RyLoSStrategy(IStrategy):
     # posizioni che poi risalgono: costa premio e non protegge nulla di
     # misurabile in 604 giorni. Non è ridondanza col time exit — spegnerlo
     # migliora anche col time exit disattivato (+66%).
-    unstuck_threshold = DecimalParameter(0.55, 1.00, default=0.902, space="sell", optimize=True)
-    unstuck_close_pct = DecimalParameter(0.04, 0.08, default=0.043, space="sell", optimize=True)
-    unstuck_ema_dist = DecimalParameter(-0.03, 0.0, default=-0.008, space="sell", optimize=True)
+    unstuck_threshold = DecimalParameter(0.55, 1.00, default=0.905, space="sell", optimize=True)
+    unstuck_close_pct = DecimalParameter(0.04, 0.08, default=0.07, space="sell", optimize=True)
+    unstuck_ema_dist = DecimalParameter(-0.03, 0.0, default=0.0, space="sell", optimize=True)
     unstuck_loss_allowance_pct = DecimalParameter(
-        0.005, 0.012, default=0.011, space="sell", optimize=True
+        0.005, 0.012, default=0.008, space="sell", optimize=True
     )
     # Anti-bag: oltre questi giorni la posizione è considerata stuck comunque.
     # Bound estesi verso il basso (era 5-20) perché il dominio reale delle
@@ -263,7 +263,7 @@ class RyLoSStrategy(IStrategy):
     # P&L) senza toccare i 736 che chiudono entro 24h. 0.0 = clip costante
     # (comportamento storico). Scala anche il budget di perdita per clip,
     # altrimenti su un bag vecchio e profondo la clip resta bloccata.
-    unstuck_age_scaling = DecimalParameter(0.0, 1.0, default=0.537, space="sell", optimize=True)
+    unstuck_age_scaling = DecimalParameter(0.0, 1.0, default=0.541, space="sell", optimize=True)
     UNSTUCK_MAX_CLIP_PCT = 0.50
 
     # ===== TIME EXIT: chiusura per anzianità =====
@@ -283,7 +283,7 @@ class RyLoSStrategy(IStrategy):
     # al tetto duro (time_exit_days * TIME_EXIT_HARD_MULT), che evita il bag
     # zombie. Motivazione: 19 dei 25 trade oltre 3 giorni del 5371 chiudono
     # in profitto — la chiusura secca butta via anche quelli che recuperano.
-    time_exit_qty_pct = DecimalParameter(0.2, 1.0, default=0.447, space="sell", optimize=True)
+    time_exit_qty_pct = DecimalParameter(0.2, 1.0, default=0.344, space="sell", optimize=True)
     TIME_EXIT_COOLDOWN_H = 24
     TIME_EXIT_HARD_MULT = 2.0
 
@@ -296,7 +296,7 @@ class RyLoSStrategy(IStrategy):
     # Torna a default neutro 1.0: resta ottimizzabile perché interagisce con
     # la nuova clip progressiva, ma il seed deve essere il 5371 esatto.
     unstuck_release_ratio = DecimalParameter(
-        0.5, 1.0, default=0.623, space="sell", optimize=True
+        0.5, 1.0, default=0.695, space="sell", optimize=True
     )
 
     # ===== IDEA 2 — harvest a griglia esaurita =====
