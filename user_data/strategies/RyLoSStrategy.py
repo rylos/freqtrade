@@ -221,6 +221,38 @@ class RyLoSStrategy(IStrategy):
     # evita il "moncherino" che resta aperto per settimane
     CLOSE_GRID_MAX_CLIPS = 2
 
+    # ===== VALVOLA DI DE-RISKING (close grid a markup negativo) =====
+    # La close grid chiede SEMPRE un profitto: sotto la media non scarica mai.
+    # Quindi nell'unico caso che conta davvero — griglia quasi esaurita e
+    # prezzo che continua a scendere — non esiste nessun meccanismo che
+    # alleggerisca prima dello stop. Il time exit arriva a giorni, lo stop a
+    # -68,5% sullo stake: in mezzo non c'e' niente.
+    #
+    # In passivbot il markup di chiusura non e' una costante: scende man mano
+    # che la posizione si riempie, fino a passare sotto zero. Qui il markup
+    # efficace interpola fra close_grid_markup_pct (esposizione alla soglia) e
+    # derisk_markup_end (esposizione al tetto), quindi si apre in modo
+    # continuo, non a scatto.
+    #
+    # Tre vincoli, tutti necessari:
+    #  - si attiva SOLO sopra derisk_exposure_start: sotto quella soglia
+    #    vendere in perdita e' solo regalare il ritraccio;
+    #  - la perdita realizzata esce dal budget ancorato al picco
+    #    (_loss_allowance), quindi si spegne da sola quando il conto e'
+    #    sott'acqua invece di accanirsi;
+    #  - cooldown come le clip di unstuck, altrimenti scarica a raffica.
+    # Default OFF = comportamento storico.
+    derisk_enabled = CategoricalParameter(
+        [True, False], default=False, space="sell", optimize=False
+    )
+    derisk_exposure_start = DecimalParameter(
+        0.40, 0.95, default=0.70, space="sell", optimize=True
+    )
+    derisk_markup_end = DecimalParameter(
+        -0.040, 0.0, default=-0.010, space="sell", optimize=True
+    )
+    derisk_qty_pct = DecimalParameter(0.05, 0.40, default=0.15, space="sell", optimize=True)
+
     # Profit-lock (rifinitura): realizza gli spike di equity non realizzata.
     # Trigger sul profit ratio del trade (non sul markup prezzo), bypassa il
     # cooldown ordini: su un pump verticale il close_grid (clip 49% ogni 2
@@ -773,6 +805,45 @@ class RyLoSStrategy(IStrategy):
                     -reduce_stake,
                     f"tp_grid_{price_markup * 100:.2f}%",
                 )
+
+        # ===== VALVOLA DI DE-RISKING: scarico a markup negativo =====
+        # Speculare alla close grid: quella lavora sopra la media, questa
+        # sotto, e solo a griglia quasi piena.
+        if self.derisk_enabled.value and current_profit <= 0:
+            total_balance = self.wallets.get_total_stake_amount()
+            per_pair_limit = (
+                total_balance * self.total_wallet_exposure_limit.value
+            ) / max_open_trades
+            exposure_ratio = (
+                trade.stake_amount * 4 / per_pair_limit if per_pair_limit > 0 else 0.0
+            )
+            start = self.derisk_exposure_start.value
+            if exposure_ratio >= start:
+                # t = 0 alla soglia, 1 al tetto: il markup scivola da quello
+                # della close grid fino a derisk_markup_end (negativo).
+                t = min(1.0, (exposure_ratio - start) / max(1e-9, 1.0 - start))
+                markup = (
+                    self.close_grid_markup_pct.value * (1.0 - t)
+                    + self.derisk_markup_end.value * t
+                )
+                price_markup = (current_rate - trade.open_rate) / trade.open_rate
+                if price_markup >= markup:
+                    last_dr = self._last_exit_time(trade, "derisk_")
+                    dr_wait = timedelta(
+                        minutes=timeframe_to_minutes(self.timeframe)
+                        * self.UNSTUCK_COOLDOWN_CANDLES
+                    )
+                    if last_dr is None or (current_time - last_dr) >= dr_wait:
+                        reduce_stake = trade.stake_amount * self.derisk_qty_pct.value
+                        remaining = trade.stake_amount - reduce_stake
+                        if min_stake and remaining < min_stake * 2:
+                            reduce_stake = trade.stake_amount
+                        estimated_loss = reduce_stake * max(0.0, -current_profit)
+                        if estimated_loss <= self._loss_allowance(total_balance, 1.0):
+                            return (
+                                -reduce_stake,
+                                f"derisk_{exposure_ratio:.2f}_{price_markup * 100:.2f}%",
+                            )
 
         # ===== TIME EXIT: scarico del bag per anzianità =====
         # Prima dell'unstuck: agisce a prescindere da EMA e budget di perdita,
