@@ -266,6 +266,22 @@ class RyLoSStrategy(IStrategy):
     unstuck_age_scaling = DecimalParameter(0.0, 1.0, default=0.541, space="sell", optimize=True)
     UNSTUCK_MAX_CLIP_PCT = 0.50
 
+    # ===== Budget di perdita: per-clip oppure ancorato al picco (passivbot) =====
+    # "clip" (storico): ogni singola riduzione deve costare meno di
+    # loss_allowance_pct del balance. Non ha memoria — mille clip da poco
+    # passano tutte, quindi il meccanismo puo' dissanguare senza mai
+    # incontrare un limite.
+    # "peak" (passivbot): il budget e' UNO SOLO per tutto il conto, misurato
+    # contro il picco di equity realizzata:
+    #     allowance = picco * loss_allowance_pct * TWE - (picco - equity)
+    # cioe' l'unstuck puo' spendere in perdite realizzate una quota del picco,
+    # e si SPEGNE da solo quando l'ha spesa. Si rigenera quando il conto fa
+    # nuovi massimi. E' la differenza vera con l'implementazione storica:
+    # un budget che ricorda quanto ha gia' bruciato.
+    unstuck_allowance_mode = CategoricalParameter(
+        ["clip", "peak"], default="clip", space="sell", optimize=False
+    )
+
     # ===== TIME EXIT: chiusura per anzianità =====
     # Il pezzo che mancava a tutta la meccanica anti-bag. L'unstuck riduce ma
     # non chiude mai, quindi senza questo un bag può restare aperto per mesi
@@ -350,6 +366,7 @@ class RyLoSStrategy(IStrategy):
     # numero di ordini del trade.
     _exit_time_cache: dict = {}
     _max_orders_cache: int | None = None
+    _pnl_peak_cache: tuple | None = None
 
     class HyperOpt:
         # Guard-stoploss (rifinitura): banda -0.9..-0.4 sullo stake (leva 4x:
@@ -480,6 +497,47 @@ class RyLoSStrategy(IStrategy):
             )
         self._fill_cache[trade.id] = (n_orders, info)
         return info
+
+    def _loss_allowance(self, total_balance: float, age_factor: float) -> float:
+        """
+        Budget di perdita disponibile per una riduzione (unstuck / harvest).
+
+        Modalita' "clip" (storica): budget per singola riduzione, senza
+        memoria. Modalita' "peak" (passivbot): budget unico di conto,
+        ancorato al picco dell'equity realizzata.
+
+            allowance = picco * pct * TWE - (picco - equity)
+
+        Il secondo termine e' il drawdown realizzato dal picco: quello che
+        l'unstuck ha gia' speso (piu' quello che hanno perso gli stop). Il
+        budget quindi si consuma man mano e torna disponibile solo con nuovi
+        massimi di conto — sott'acqua l'unstuck si spegne invece di limare.
+
+        Non scala con l'eta': un budget di conto non ha motivo di allargarsi
+        perche' *quel* bag e' vecchio. L'eta' resta a governare la dimensione
+        della clip, non il permesso di perdere.
+        """
+        pct = self.unstuck_loss_allowance_pct.value
+        if self.unstuck_allowance_mode.value != "peak":
+            return total_balance * pct * age_factor
+
+        closed = Trade.get_trades_proxy(is_open=False)
+        n_closed = len(closed)
+        cached = self._pnl_peak_cache
+        if cached is None or cached[0] != n_closed:
+            cum = 0.0
+            peak = 0.0
+            for t in sorted(closed, key=lambda x: x.close_date_utc):
+                cum += t.close_profit_abs or 0.0
+                peak = max(peak, cum)
+            self._pnl_peak_cache = (n_closed, cum, peak)
+        _, cum, peak = self._pnl_peak_cache
+
+        start = self.wallets.get_starting_balance()
+        equity_peak = start + peak
+        equity_now = start + cum
+        budget = equity_peak * pct * self.total_wallet_exposure_limit.value
+        return max(0.0, budget - (equity_peak - equity_now))
 
     def _last_exit_time(self, trade: Trade, prefix: str) -> datetime | None:
         """
@@ -793,11 +851,8 @@ class RyLoSStrategy(IStrategy):
                             # (scalato con l'età, altrimenti il budget blocca
                             # proprio le clip sui bag vecchi che vogliamo limare)
                             estimated_loss = reduce_stake * abs(current_profit)
-                            if (
-                                estimated_loss
-                                <= total_balance
-                                * self.unstuck_loss_allowance_pct.value
-                                * age_factor
+                            if estimated_loss <= self._loss_allowance(
+                                total_balance, age_factor
                             ):
                                 return (
                                     -reduce_stake,
@@ -825,10 +880,7 @@ class RyLoSStrategy(IStrategy):
                     if min_stake and remaining < min_stake * 2:
                         reduce_stake = trade.stake_amount
                     estimated_loss = reduce_stake * max(0.0, -current_profit)
-                    if (
-                        estimated_loss
-                        <= total_balance * self.unstuck_loss_allowance_pct.value
-                    ):
+                    if estimated_loss <= self._loss_allowance(total_balance, 1.0):
                         markup = (current_rate - last_order_price) / last_order_price
                         return -reduce_stake, f"harvest_{markup * 100:.1f}%"
 
@@ -1102,6 +1154,7 @@ class RyLoSStrategy(IStrategy):
         # i valori restano comunque validi tra epoch)
         self._extremes_cache.clear()
         self._exit_time_cache.clear()
+        self._pnl_peak_cache = None
 
         # 4RSI oversold: istogramma sotto soglia + filtro stocastico
         osc_condition = (dataframe["osc_4rsi"] < self.osc_entry_threshold.value).fillna(False)
