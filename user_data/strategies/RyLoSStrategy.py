@@ -243,10 +243,14 @@ class RyLoSStrategy(IStrategy):
     #  - cooldown come le clip di unstuck, altrimenti scarica a raffica.
     # Default OFF = comportamento storico.
     derisk_enabled = CategoricalParameter(
-        [True, False], default=False, space="sell", optimize=False
+        [True, False], default=False, space="sell", optimize=True
     )
+    # ⚠️ L'esposizione non e' continua: con la griglia a 4 gradini assume solo
+    # i valori 0.126 / 0.298 / 0.533 / 0.854. La soglia quindi non seleziona un
+    # livello ma un GRADINO, e il fondo del range deve arrivare sotto 0.126
+    # perche' "da sempre" sia raggiungibile.
     derisk_exposure_start = DecimalParameter(
-        0.40, 0.95, default=0.70, space="sell", optimize=True
+        0.10, 0.95, default=0.70, space="sell", optimize=True
     )
     derisk_markup_end = DecimalParameter(
         -0.040, 0.0, default=-0.010, space="sell", optimize=True
@@ -819,13 +823,15 @@ class RyLoSStrategy(IStrategy):
             )
             start = self.derisk_exposure_start.value
             if exposure_ratio >= start:
-                # t = 0 alla soglia, 1 al tetto: il markup scivola da quello
-                # della close grid fino a derisk_markup_end (negativo).
+                # t = 0 alla soglia, 1 al tetto. La rampa parte da ZERO, non
+                # da close_grid_markup_pct: questo ramo gira solo con
+                # current_profit <= 0, quindi un markup positivo sarebbe una
+                # condizione impossibile e la valvola non aprirebbe mai.
+                # (Misurato: partendo da 0.021 il markup efficace resta
+                # +0,51% all'esposizione massima raggiungibile, 0.854 su
+                # TWE 2.189 — zero scatti in tutto il ribasso.)
                 t = min(1.0, (exposure_ratio - start) / max(1e-9, 1.0 - start))
-                markup = (
-                    self.close_grid_markup_pct.value * (1.0 - t)
-                    + self.derisk_markup_end.value * t
-                )
+                markup = self.derisk_markup_end.value * t
                 price_markup = (current_rate - trade.open_rate) / trade.open_rate
                 if price_markup >= markup:
                     last_dr = self._last_exit_time(trade, "derisk_")
