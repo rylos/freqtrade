@@ -241,9 +241,15 @@ class RyLoSStrategy(IStrategy):
     #    (_loss_allowance), quindi si spegne da sola quando il conto e'
     #    sott'acqua invece di accanirsi;
     #  - cooldown come le clip di unstuck, altrimenti scarica a raffica.
-    # Default OFF = comportamento storico.
+    # ⛔ BOCCIATO, 2026-08-28. Default OFF e optimize=False: due run da 1200
+    # epoch (spazio sell, poi buy+sell) hanno esplorato 633 e 584
+    # configurazioni con la valvola accesa senza mai battere il seed —
+    # miglior loss accesa -32,269 e -25,910 contro -36,364 di T9. Lasciarlo
+    # ottimizzabile brucia meta' delle epoch su un meccanismo gia' misurato.
+    # Riaprirlo solo se il budget di drawdown scende sotto il 30%: allora
+    # comprare varianza con rendimento torna a essere il baratto giusto.
     derisk_enabled = CategoricalParameter(
-        [True, False], default=False, space="sell", optimize=True
+        [True, False], default=False, space="sell", optimize=False
     )
     # ⚠️ L'esposizione non e' continua: con la griglia a 4 gradini assume solo
     # i valori 0.126 / 0.298 / 0.533 / 0.854. La soglia quindi non seleziona un
