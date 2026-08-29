@@ -243,14 +243,16 @@ def main() -> None:  # noqa: C901
             firma = {"aperto": tid, "gradini": len(gradini), "chiusi": n_chiusi}
             ore = (time.time() - (utc_ts(open_date) or time.time())) / 3600
 
+            pct_ora = (price / open_rate - 1) * 100 if price else None
+            coda = f" · ora {price:.2f} ({pct_ora:+.1f}%)" if price else ""
             if prev.get("aperto") != tid:
-                eventi.append(f"🟦 <b>trade {tid} aperto</b>")
+                eventi.append(f"🟦 trade {tid} aperta · {open_rate:.2f}{coda}")
             elif prev.get("gradini", 0) < len(gradini):
                 # La griglia ha caricato: e' il momento in cui il rischio cresce,
                 # quindi si guarda il nuovo prezzo medio e lo stop ricalcolato.
                 eventi.append(
-                    f"🟦 <b>gradino {len(gradini)}</b> sul trade {tid} "
-                    f"(prima erano {prev.get('gradini', 0)})"
+                    f"🟦 trade {tid} · gradino {len(gradini)} · "
+                    f"medio {open_rate:.2f}{coda}" + (f" · stop {stop:.2f}" if stop else "")
                 )
 
             riga = f"trade {tid}, aperto da {ore:.0f}h · {len(gradini)} gradini · "
@@ -273,9 +275,12 @@ def main() -> None:  # noqa: C901
             if prev.get("chiusi") is not None and prev["chiusi"] < n_chiusi and ultimo:
                 tid, close_date, pl, pl_pct, reason, open_date = ultimo
                 dur = ((utc_ts(close_date) or 0) - (utc_ts(open_date) or 0)) / 3600
+                grad = len(entry_fills(conn, tid))
                 eventi.append(
-                    f"🟩 <b>trade {tid} chiuso</b>: {pl:+.0f} USDT "
-                    f"({(pl_pct or 0) * 100:+.2f}%) dopo {dur:.0f}h · {esc(str(reason))}"
+                    f"✅ trade {tid} chiusa · {pl:+.2f} USDT "
+                    f"({(pl_pct or 0) * 100:+.1f}%) · {grad} gradin"
+                    f"{'o' if grad == 1 else 'i'} · {dur:.0f}h · "
+                    f"{esc(str(reason))} · totale {pl_tot + 0:+.0f}"
                 )
             t = utc_ts(ultimo[1]) if ultimo else None
             flat_h = (time.time() - t) / 3600 if t else None
@@ -310,8 +315,14 @@ def main() -> None:  # noqa: C901
     if not alert and not eventi:
         return
 
-    head = "🟠 <b>freqtrade da guardare</b>" if alert else "<b>freqtrade</b>"
-    send("\n".join([head, *eventi, *rows]))
+    # Un evento normale e' una riga sola, come il report passivbot: il blocco
+    # diagnostico completo si apre solo quando c'e' qualcosa da guardare.
+    # Un messaggio lungo per ogni chiusura regolare insegna solo a non aprirli.
+    if not alert:
+        send("\n".join(eventi))
+        return
+
+    send("\n".join(["🟠 <b>freqtrade da guardare</b>", *eventi, *rows]))
 
 
 if __name__ == "__main__":
