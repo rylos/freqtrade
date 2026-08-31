@@ -220,6 +220,30 @@ class RyLoSStrategy(IStrategy):
     # Dopo questo numero di clip, il trigger successivo chiude tutto:
     # evita il "moncherino" che resta aperto per settimane
     CLOSE_GRID_MAX_CLIPS = 2
+    CLOSE_GRID_MAX_CLIPS_RAMP = 8
+
+    # ===== CLOSE GRID A RAMPA (passivbot close_grid_markup_start/end) =====
+    # Passivbot NON tiene un markup fisso: lo interpola sul riempimento della
+    # griglia, e l'estremo e' NEGATIVO. Config live ry-hl (2026-08-31):
+    # start +0.294%, end -1.856%, qty_pct 0.292, nessuno stop loss.
+    # A posizione piccola chiede +0.29% sopra la media; a esposizione piena
+    # accetta di uscire l'1.86% SOTTO la media. Non aspetta il pareggio:
+    # abbassa l'asticella man mano che si carica, ed e' quello che tiene il
+    # drawdown contenuto pur senza stop.
+    # ⚠️ E' un PACCHETTO con scala leggera e assenza di stop. Da solo, dentro
+    # il design di T9 (scala pesante + stop a -17.1%), regala rendimento a uno
+    # stop che protegge gia': e' esattamente cio' che la valvola di de-risking
+    # ha misurato e per cui e' stata bocciata il 2026-08-30. Vedi memoria
+    # `derisk-riduttore-varianza`.
+    close_grid_mode = CategoricalParameter(
+        ["fixed", "ramp"], default="fixed", space="sell", optimize=False
+    )
+    close_grid_markup_start = DecimalParameter(
+        -0.005, 0.030, default=0.003, space="sell", optimize=True
+    )
+    close_grid_markup_end = DecimalParameter(
+        -0.040, 0.010, default=-0.019, space="sell", optimize=True
+    )
 
     # ===== VALVOLA DI DE-RISKING (close grid a markup negativo) =====
     # La close grid chiede SEMPRE un profitto: sotto la media non scarica mai.
@@ -800,21 +824,66 @@ class RyLoSStrategy(IStrategy):
         # ===== CLOSE GRID (passivbot): take-profit a clip parziali =====
         # Prezzo sopra avg_entry * (1 + markup) -> vendi una clip; il resto
         # lo gestiscono trailing close / oscillatori / clip successive
-        if self.close_grid_enabled.value and current_profit > 0:
-            price_markup = (current_rate - trade.open_rate) / trade.open_rate
-            if price_markup >= self.close_grid_markup_pct.value:
-                n_exits = trade.nr_of_successful_exits
-                reduce_stake = trade.stake_amount * self.close_grid_qty_pct.value
-                remaining = trade.stake_amount - reduce_stake
-                if n_exits >= self.CLOSE_GRID_MAX_CLIPS or (
-                    min_stake and remaining < min_stake * 2
-                ):
-                    # basta clip: chiudi tutta la posizione residua
-                    reduce_stake = trade.stake_amount
-                return (
-                    -reduce_stake,
-                    f"tp_grid_{price_markup * 100:.2f}%",
+        if self.close_grid_enabled.value:
+            ramp = self.close_grid_mode.value == "ramp"
+            if ramp:
+                # markup interpolato sul riempimento della griglia: puo' essere
+                # negativo, quindi qui NON si filtra su current_profit > 0 —
+                # e' proprio la clip sotto la media che vogliamo permettere.
+                total_balance = self.wallets.get_total_stake_amount()
+                per_pair_limit = (
+                    total_balance * self.total_wallet_exposure_limit.value
+                ) / max_open_trades
+                exposure_ratio = (
+                    trade.stake_amount * 4 / per_pair_limit if per_pair_limit > 0 else 0.0
                 )
+                if exposure_ratio > 1.0:
+                    # sopra il tetto passivbot non interpola: va diritto
+                    # all'estremo (closes.rs, ramo wallet_exposure_ratio > 1)
+                    markup = min(
+                        self.close_grid_markup_start.value,
+                        self.close_grid_markup_end.value,
+                    )
+                else:
+                    t = max(0.0, exposure_ratio)
+                    markup = self.close_grid_markup_start.value + (
+                        self.close_grid_markup_end.value
+                        - self.close_grid_markup_start.value
+                    ) * t
+                max_clips = self.CLOSE_GRID_MAX_CLIPS_RAMP
+                aperta = True
+            else:
+                markup = self.close_grid_markup_pct.value
+                max_clips = self.CLOSE_GRID_MAX_CLIPS
+                aperta = current_profit > 0
+
+            if aperta:
+                price_markup = (current_rate - trade.open_rate) / trade.open_rate
+                if price_markup >= markup:
+                    n_exits = trade.nr_of_successful_exits
+                    if ramp:
+                        # La clip e' una frazione della posizione PIENA, non di
+                        # quella corrente (closes.rs:61-95). Conseguenza: su una
+                        # posizione piccola la frazione e' piu' grande della
+                        # posizione stessa e il min() la satura, cioe' la close
+                        # grid chiude tutto in un fill solo. E' il regime
+                        # abituale: nel loro live, 8 fill close_grid su 447.
+                        full_stake = per_pair_limit / 4
+                        leftover = max(0.0, trade.stake_amount - full_stake)
+                        reduce_stake = min(
+                            trade.stake_amount,
+                            full_stake * self.close_grid_qty_pct.value + leftover,
+                        )
+                    else:
+                        reduce_stake = trade.stake_amount * self.close_grid_qty_pct.value
+                    remaining = trade.stake_amount - reduce_stake
+                    if n_exits >= max_clips or (min_stake and remaining < min_stake * 2):
+                        # basta clip: chiudi tutta la posizione residua
+                        reduce_stake = trade.stake_amount
+                    return (
+                        -reduce_stake,
+                        f"tp_grid_{price_markup * 100:.2f}%",
+                    )
 
         # ===== VALVOLA DI DE-RISKING: scarico a markup negativo =====
         # Speculare alla close grid: quella lavora sopra la media, questa
