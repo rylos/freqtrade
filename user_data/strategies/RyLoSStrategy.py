@@ -185,6 +185,12 @@ class RyLoSStrategy(IStrategy):
     min_profit_for_overbought_exit = DecimalParameter(
         0.02, 0.07, default=0.059, space="sell", optimize=True
     )
+    # Soglia adattiva al regime: sotto la EMA lenta (giorni) la soglia di
+    # profitto dell'exit 4RSI si abbassa di questo fattore. A 1.0 e' spenta.
+    exit_regime_span_days = IntParameter(3, 21, default=7, space="sell", optimize=False)
+    exit_bear_profit_factor = DecimalParameter(
+        0.4, 1.0, default=1.0, space="sell", optimize=False
+    )
 
     # Trailing close passivbot (close trailing_threshold/retracement, config dd39):
     # exit quando il massimo dall'ultimo fill supera avg_price*(1+threshold)
@@ -1271,6 +1277,12 @@ class RyLoSStrategy(IStrategy):
             dataframe["close"], timeperiod=self.ema_span_candles.value
         )
 
+        # Regime lento per la soglia d'uscita: ewm di pandas, cosi' e' definita
+        # anche prima che la finestra di warmup sia piena.
+        regime_span = self.exit_regime_span_days.value * 288
+        dataframe["ema_regime"] = dataframe["close"].ewm(span=regime_span, adjust=True).mean()
+        dataframe["regime_bear"] = dataframe["close"] < dataframe["ema_regime"]
+
         # Twiggs Money Flow: pressione in acquisto misurata sul true range
         # (regge i casi in cui la chiusura precedente cade fuori dal range) e
         # smorzata con la media di Wilder. Serve solo a modulare lo stake DCA.
@@ -1379,8 +1391,15 @@ class RyLoSStrategy(IStrategy):
                         return f"sell_trailing_close_{current_profit * 100:.1f}%"
 
         # ===== 4RSI Overbought Exit (istogramma continuo) =====
-        if current_profit > self.min_profit_for_overbought_exit.value:
+        min_profit_exit = self.min_profit_for_overbought_exit.value
+        dataframe = None
+        if self.exit_bear_profit_factor.value < 1.0:
             dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
+            if len(dataframe) > 0 and bool(dataframe["regime_bear"].iat[-1]):
+                min_profit_exit *= self.exit_bear_profit_factor.value
+        if current_profit > min_profit_exit:
+            if dataframe is None:
+                dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
             if len(dataframe) > 0:
                 osc = dataframe["osc_4rsi"].iat[-1]
                 stoch_k = dataframe["stoch_k"].iat[-1]
